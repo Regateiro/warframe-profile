@@ -336,7 +336,7 @@ def print_craft_tree(
     item = items_by_un.get(item_un_lower)
 
     recipe_components = (
-        get_recipe_components(item_un_lower, items_by_un, recipes_by_result)
+        get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
     )

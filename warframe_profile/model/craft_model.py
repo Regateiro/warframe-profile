@@ -133,17 +133,19 @@ def get_recipe_components(
     item_un_lower: str,
     items_by_un: dict,
     recipes_by_result: dict,
+    loc_dict: dict | None = None,
 ) -> list[dict]:
     """Return the ingredient list for *item_un_lower*, with resolved names."""
     recipe = recipes_by_result.get(item_un_lower)
     if not recipe:
         return []
+    _loc = loc_dict or {}
     comps: list[dict] = []
     for ing in recipe["ingredients"]:
         ing_un = ing["ItemType"]
         ing_item = items_by_un.get(ing_un.lower())
         ing_name = (
-            resolve_name(ing_item.get("name", ""), {})
+            resolve_name(ing_item.get("name", ""), _loc)
             if ing_item else ""
         )
         comps.append({
@@ -276,7 +278,7 @@ def resolve_tree(
     item_un_lower = item_un.lower()
     item = items_by_un.get(item_un_lower)
     recipe_components = (
-        get_recipe_components(item_un_lower, items_by_un, recipes_by_result)
+        get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
     )
@@ -512,7 +514,7 @@ def build_weapon_chains(
             if bp_key:
                 bp_owned = owned.get(normalize_path(bp_key), 0)
                 if bp_owned < 1:
-                    names = [_weapon_name(u, items_by_un, {}) for u in chain]
+                    names = [_weapon_name(u, items_by_un, loc_dict) for u in chain]
                     bp_name = f"{names[-1]} Blueprint"
                     key = bp_key.lower()
                     if key in all_requirements:
