@@ -12,6 +12,7 @@ import os
 import sys
 
 from warframe_profile import DATA_DIR
+from warframe_profile.model.inventory import load_inventory_with_fallback
 
 
 #: Maps CLI flag names to (module_path, function_name) pairs.
@@ -90,6 +91,12 @@ def main() -> int:
     selected = [name for name in ("craft", "ducats", "cleanup",
                                    "update", "relics", "serve")
                 if getattr(args, name)]
+
+    if args.refresh and not selected:
+        inv_path = args.inventory or os.path.join(DATA_DIR, "inventory.json")
+        load_inventory_with_fallback(inv_path, refresh=True)
+        return 0
+
     if len(selected) != 1:
         parser.print_help()
         print("\nSpecify exactly one of: --craft, --ducats, --cleanup, "
