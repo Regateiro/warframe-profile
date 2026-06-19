@@ -124,26 +124,19 @@ def _tier_index(item: dict) -> int:
 def _max_xp_for_item(item: dict) -> int:
     """Return the expected cumulative XP when *item* reaches max rank.
 
-    Warframe's XP-per-rank curve is linear:
-        XP needed for rank N = N × base_rate
+    Warframe's XP-per-rank curve is quadratic (per the official wiki):
+        Cumulative XP at rank R = base × R²
 
-    Total cumulative XP at rank R = base × R × (R + 1) / 2.
-
-    * Warframes, Archwings, Sentinels, Pets, Necramechs → base 2 000 → 930 000
-    * Kuva / Tenet / Coda weapons (rank 40)           → base 1 000 → 820 000
-    * Everything else (weapons, amps, etc.)            → base 1 000 → 465 000
-
-    In practice the game records slightly less cumulative XP than the
-    formula predicts (observed min ~97 %).  We use **95 %** of the
-    theoretical value as the cutoff to avoid false positives on max-rank
-    items.
+    * Warframes, Archwings, Sentinels, Pets, Necramechs → base 1 000 → rank 30 = **900 000**
+    * Kuva / Tenet / Coda weapons (rank 40)             → base 500   → rank 40 = **800 000**
+    * Everything else (weapons, amps, etc.)              → base 500   → rank 30 = **450 000**
     """
     cat = item.get("category", "")
     if cat in ("Warframes", "Archwing", "Sentinels", "Pets", "Necramech"):
-        return 883_500   # 930 000 × 0.95
+        return 900_000
     if _is_lich_item(item):
-        return 779_000   # 820 000 × 0.95
-    return 441_750       # 465 000 × 0.95
+        return 800_000
+    return 450_000
 
 
 def _item_xp(inv: dict, path: str) -> int:
