@@ -143,6 +143,26 @@ class SellableEquipment:
 
 
 @dataclass
+class ExcessItem:
+    """A blueprint or component the player owns more copies of than needed.
+
+    Attributes:
+        name:     Display name.
+        item_type: ``"Blueprint"`` or ``"Component"``.
+        owned:    Total copies owned.
+        keep:     Number that are useful (craft into unowned items).
+        sell:     Number that can be safely sold (``owned - keep``).
+        builds:   What finished item(s) this crafts into.
+    """
+    name: str
+    item_type: str
+    owned: int
+    keep: int
+    sell: int
+    builds: str
+
+
+@dataclass
 class AnalysisResult:
     """Aggregated analysis output.
 
@@ -693,6 +713,222 @@ def build_ingredient_index(recipes: dict, items: list[dict]) -> set[str]:
     return exclude
 
 
+def build_ingredient_index_craftable_to_owned(
+    recipes: dict,
+    items: list[dict],
+    inventory: dict,
+    equipment_sections: list[str],
+) -> set[str]:
+    """Build a set of item uniqueNames that should *not* be sold.
+
+    Unlike :func:`build_ingredient_index`, this function only excludes
+    ingredients that are needed to craft items the player doesn't fully
+    own yet.  Ingredients that only craft into already-owned items are
+    considered safe to sell.
+
+    Two cases are covered (mirroring :func:`build_ingredient_index`):
+
+    1. Items used as ingredients where at least one recipe result is
+       **not** already owned.
+    2. Items whose own recipe requires a weapon as an ingredient **and**
+       the result is not already owned.
+    """
+    owned_finished: set[str] = {
+        normalize_path(eq.get("ItemType", ""))
+        for sect in equipment_sections
+        for eq in inventory.get(sect, [])
+    }
+
+    weapon_uns: set[str] = {
+        item["uniqueName"]
+        for item in items
+        if item.get("uniqueName") and item.get("category") in _WEAPON_CATEGORIES
+    }
+
+    # Build reverse indices: resultType → recipe_data and
+    # ingredient → set of resultTypes.
+    result_to_recipe: dict[str, dict] = {}
+    ingredient_to_results: dict[str, set[str]] = defaultdict(set)
+
+    for recipe_data in recipes.values():
+        rt = recipe_data.get("resultType", "")
+        if rt:
+            result_to_recipe[rt] = recipe_data
+        for ingredient in recipe_data.get("ingredients", []):
+            item_type = ingredient.get("ItemType", "")
+            if item_type and rt:
+                ingredient_to_results[item_type].add(rt)
+
+    exclude: set[str] = set()
+
+    # Case 1: ingredients that craft into at least one unowned item.
+    for recipe_data in recipes.values():
+        for ingredient in recipe_data.get("ingredients", []):
+            item_type = ingredient.get("ItemType", "")
+            if not item_type:
+                continue
+
+            results = ingredient_to_results.get(item_type, set())
+            # If ingredient has no known results or any result is not owned,
+            # keep it excluded — it's still needed.
+            if not results or not all(
+                normalize_path(r) in owned_finished for r in results
+            ):
+                exclude.add(item_type)
+
+    # Case 2: items whose recipe requires a weapon as ingredient and
+    # the result is not already owned.
+    for rt, recipe_data in result_to_recipe.items():
+        if normalize_path(rt) in owned_finished:
+            continue
+        for ingredient in recipe_data.get("ingredients", []):
+            if ingredient.get("ItemType", "") in weapon_uns:
+                exclude.add(rt)
+                break
+
+    return exclude
+
+
+def _all_crafting_paths_lead_to_owned(
+    item_un: str,
+    owned_finished: set[str],
+    ingredient_to_results: dict[str, set[str]],
+    visited: set[str],
+) -> bool:
+    """Return ``True`` if every item this *item_un* can craft into is already owned.
+
+    Recursively follows the recipe chain (component → sub-assembly → finished
+    item).  If *any* path leads to an unowned item, returns ``False``.
+    """
+    norm = normalize_path(item_un)
+    if norm in owned_finished:
+        return True
+
+    if item_un in visited:
+        return True
+    visited.add(item_un)
+
+    results = ingredient_to_results.get(item_un, set())
+    if not results:
+        return norm in owned_finished
+
+    return all(
+        _all_crafting_paths_lead_to_owned(
+            r, owned_finished, ingredient_to_results, visited,
+        )
+        for r in results
+    )
+
+
+def find_excess_blueprints_and_components(
+    inventory: dict,
+    items_by_un: dict[str, dict],
+    recipes: dict,
+    owned: dict[str, int],
+    owned_finished: set[str],
+    loc_dict: dict,
+) -> list[ExcessItem]:
+    """Identify blueprints and components the player can safely sell.
+
+    A blueprint or component is *excess* when every finished item it can
+    ultimately be used to craft is already owned by the player.
+
+    Returns:
+        A list of :class:`ExcessItem` sorted by name.
+    """
+    from warframe_profile.model.craft_model import resolve_name
+
+    # Build ingredient → set of resultTypes.
+    ingredient_to_results: dict[str, set[str]] = defaultdict(set)
+    for recipe_data in recipes.values():
+        rt = recipe_data.get("resultType", "")
+        if not rt:
+            continue
+        for ingredient in recipe_data.get("ingredients", []):
+            item_type = ingredient.get("ItemType", "")
+            if item_type:
+                ingredient_to_results[item_type].add(rt)
+
+    excess: list[ExcessItem] = []
+
+    # --- Blueprints (Recipes section) ---
+    for bp in inventory.get("Recipes", []):
+        bp_un = bp.get("ItemType", "")
+        if not bp_un:
+            continue
+        bp_norm = normalize_path(bp_un)
+        count = bp.get("ItemCount", 1)
+
+        if count == 0:
+            continue
+
+        if _all_crafting_paths_lead_to_owned(
+            bp_un, owned_finished, ingredient_to_results, set(),
+        ):
+            item = items_by_un.get(bp_norm)
+            name = (
+                resolve_name(item.get("name", ""), loc_dict)
+                if item else bp_un.split("/")[-1]
+            )
+            results = ingredient_to_results.get(bp_un, set())
+            builds = ", ".join(
+                _item_display_name(r, items_by_un, loc_dict)
+                for r in results
+            ) if results else "?"
+            excess.append(ExcessItem(
+                name=name, item_type="Blueprint",
+                owned=count, keep=0, sell=count,
+                builds=builds,
+            ))
+
+    # --- Components (MiscItems) ---
+    for item in inventory.get("MiscItems", []):
+        item_un = item.get("ItemType", "")
+        if not item_un:
+            continue
+        count = item.get("ItemCount", 1)
+        if count == 0:
+            continue
+
+        results = ingredient_to_results.get(item_un, set())
+        if not results:
+            continue  # Not used in any recipe — don't flag
+
+        if _all_crafting_paths_lead_to_owned(
+            item_un, owned_finished, ingredient_to_results, set(),
+        ):
+            item_data = items_by_un.get(normalize_path(item_un))
+            name = (
+                resolve_name(item_data.get("name", ""), loc_dict)
+                if item_data else item_un.split("/")[-1]
+            )
+            builds = ", ".join(
+                _item_display_name(r, items_by_un, loc_dict)
+                for r in results
+            )
+            excess.append(ExcessItem(
+                name=name, item_type="Component",
+                owned=count, keep=0, sell=count,
+                builds=builds,
+            ))
+
+    excess.sort(key=lambda x: (x.item_type, x.name))
+    return excess
+
+
+def _item_display_name(
+    item_un: str, items_by_un: dict[str, dict], loc_dict: dict,
+) -> str:
+    """Return the human-readable name for an item uniqueName."""
+    from warframe_profile.model.craft_model import resolve_name, _un_to_name
+    item = items_by_un.get(normalize_path(item_un))
+    if item:
+        name = resolve_name(item.get("name", ""), loc_dict)
+        if name:
+            return name
+    return _un_to_name(item_un)
+
+
 def build_market_credit_map(items: list[dict]) -> dict[str, dict]:
     """Build a map of weapon ``uniqueName`` → purchase info for items
     that can be re-bought from the in-game market for credits.
@@ -850,7 +1086,9 @@ def compute_sellable_equipment(
     Convenience wrapper shared by the ``--ducats`` / ``--relics`` /
     ``--cleanup`` entry points.
     """
-    ingredient_index = build_ingredient_index(db.recipes, db.items)
+    ingredient_index = build_ingredient_index_craftable_to_owned(
+        db.recipes, db.items, inventory, equipment_sections,
+    )
     market_map = build_market_credit_map(db.items)
     return find_sellable_equipment(
         inventory, market_map, equipment_sections, ingredient_index,

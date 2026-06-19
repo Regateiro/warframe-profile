@@ -13,7 +13,7 @@ from prettytable import PrettyTable, TableStyle
 
 from warframe_profile.model.analysis import (
     AnalysisResult, ItemResult, NeededPart, RelicInfo, SellableEquipment,
-    normalize_path,
+    ExcessItem, normalize_path,
 )
 from warframe_profile.model.craft_model import (
     resolve_name, has_recipe, get_recipe_components,
@@ -269,6 +269,23 @@ def section_sellable_equipment(sellable: list[SellableEquipment]) -> None:
     print()
 
 
+def section_excess_blueprints_components(excess: list[ExcessItem]) -> None:
+    """Print the excess blueprints and components table."""
+    if not excess:
+        return
+    t = PrettyTable(title="Excess Blueprints & Components (safe to sell)")
+    t.field_names = ["Name", "Type", "Owned", "Sell", "Crafts Into"]
+    t.align["Name"] = "l"
+    t.align["Type"] = "l"
+    t.align["Owned"] = "r"
+    t.align["Sell"] = "r"
+    t.align["Crafts Into"] = "l"
+    for e in excess:
+        t.add_row([e.name, e.item_type, e.owned, e.sell, e.builds])
+    print(t)
+    print()
+
+
 def section_items_with_owned_prime(
     owned_regular: set[str],
     reg_to_prime: dict[str, dict],
@@ -399,21 +416,18 @@ def print_craft_tree(
         )
         consumed[comp_un_lower] += label_mult
 
-        color = (
-            GREEN
-            if parent_satisfied or satisfied
-            else craft_color_for_owned(comp_owned_qty, label_mult)
-        )
+        color = craft_color_for_owned(comp_owned_qty, label_mult)
 
-        expand = should_expand(
-            comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
+        expand = (
+            should_expand(
+                comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
+            )
+            and not (comp_owned_qty >= label_mult)
         )
 
         print(f"{prefix}{connector}{color}{label}{RESET}")
         if expand:
-            comp_satisfied = (
-                parent_satisfied or satisfied or (comp_owned_qty >= label_mult)
-            )
+            comp_satisfied = False
             print_craft_tree(
                 comp_un, label_mult, items_by_un, owned,
                 recipes_by_result, loc_dict,

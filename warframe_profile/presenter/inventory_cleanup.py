@@ -12,14 +12,16 @@ Identifies items and parts you can safely sell:
 import sys
 
 from warframe_profile.model.inventory import (
-    EQUIPMENT_SECTIONS, load_data,
+    EQUIPMENT_SECTIONS, load_data, build_owned,
 )
 from warframe_profile.model.analysis import (
     build_prime_map, build_item_index, compute_sellable_equipment,
     build_regular_to_prime_map, find_owned_item_uns, find_owned_prime_uns,
+    find_excess_blueprints_and_components, normalize_path,
 )
 from warframe_profile.view.report import (
     section_sellable_equipment, section_items_with_owned_prime,
+    section_excess_blueprints_components,
 )
 
 
@@ -52,6 +54,17 @@ def main(args) -> None:
     section_items_with_owned_prime(
         owned_regular, reg_to_prime, owned_primes, items_by_un,
     )
+
+    owned_finished: set[str] = {
+        normalize_path(eq.get("ItemType", ""))
+        for sect in EQUIPMENT_SECTIONS
+        for eq in inv.get(sect, [])
+    }
+    excess = find_excess_blueprints_and_components(
+        inv, items_by_un, db.recipes, build_owned(inv),
+        owned_finished, {},
+    )
+    section_excess_blueprints_components(excess)
 
 
 if __name__ == "__main__":

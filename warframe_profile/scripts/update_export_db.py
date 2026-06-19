@@ -18,6 +18,7 @@ import sys
 import urllib.request
 
 from warframe_profile import DATA_DIR
+from warframe_profile.model.inventory import load_inventory_with_fallback
 
 #: Base URL for Digital Extremes' public export files.
 DE_BASE = "https://browse.wf/warframe-public-export-plus/"
@@ -188,10 +189,25 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
 def main(args=None) -> None:
     """Download DE export + WFCD items, merge, and save to ``data/export_db.json``.
 
-    *args* is unused (included for a consistent interface with other
-    sub-command entry points).
+    When *args* is provided, the following flags are respected:
+
+    * ``--items-cache`` / ``-i`` — output path for the merged database.
+    * ``--refresh-items`` — remove the old cache before downloading.
+    * ``--refresh`` / ``-r`` — also refresh the player inventory after updating.
     """
     combined: dict = {}
+
+    # Determine output path.
+    if args is not None and getattr(args, "items_cache", None):
+        out_path = args.items_cache
+    else:
+        out_path = os.path.join(DATA_DIR, "export_db.json")
+
+    # --refresh-items: delete old cache before downloading.
+    if args is not None and getattr(args, "refresh_items", False):
+        if os.path.exists(out_path):
+            print(f"Removing {out_path} ...", file=sys.stderr)
+            os.remove(out_path)
 
     # Download DE export files.
     for fname, label in DE_FILES.items():
@@ -215,7 +231,6 @@ def main(args=None) -> None:
     merged = merge(combined, wfcd)
 
     # Write output.
-    out_path = os.path.join(DATA_DIR, "export_db.json")
     with open(out_path, "w") as f:
         json.dump(merged, f, indent=2)
 
@@ -223,6 +238,12 @@ def main(args=None) -> None:
     n_dict = len(merged.get("dict", {}))
     print(f"\nSaved {out_path} ({n_items} merged items, "
           f"{n_dict} dict entries)", file=sys.stderr)
+
+    # --refresh / -r: also refresh the player inventory.
+    if args is not None and getattr(args, "refresh", False):
+        inv_path = os.path.join(DATA_DIR, "inventory.json")
+        print("Refreshing inventory ...", file=sys.stderr)
+        load_inventory_with_fallback(inv_path, refresh=True)
 
 
 if __name__ == "__main__":

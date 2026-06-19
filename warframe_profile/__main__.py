@@ -21,6 +21,7 @@ _COMMAND_TABLE = {
     "cleanup": ("warframe_profile.presenter.inventory_cleanup", "main"),
     "update":  ("warframe_profile.scripts.update_export_db",    "main"),
     "relics":  ("warframe_profile.presenter.cli",               "relics_main"),
+    "serve":   ("warframe_profile.presenter.web_server",        "main"),
 }
 
 
@@ -39,7 +40,9 @@ def _build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--update",  action="store_true",
                       help="Update export database")
     mode.add_argument("--relics",  action="store_true",
-                      help="Relic drop analysis")
+                       help="Relic drop analysis")
+    mode.add_argument("--serve",   action="store_true",
+                       help="Start web UI server")
 
     # -- Shared options (used by multiple sub-commands).
     shared = parser.add_argument_group("shared options")
@@ -55,6 +58,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Path to the merged items export database")
     shared.add_argument("--refresh-items", action="store_true",
                         help="Delete and re-load the items cache")
+    shared.add_argument("--port", type=int, default=8080,
+                        help="Web server port (default: 8080)")
 
     # -- Craft-tree options (only meaningful with --craft).
     craft = parser.add_argument_group("craft-tree options")
@@ -83,12 +88,12 @@ def main() -> int:
 
     # Find the single flag that was set.
     selected = [name for name in ("craft", "ducats", "cleanup",
-                                   "update", "relics")
+                                   "update", "relics", "serve")
                 if getattr(args, name)]
     if len(selected) != 1:
         parser.print_help()
         print("\nSpecify exactly one of: --craft, --ducats, --cleanup, "
-              "--update, --relics", file=sys.stderr)
+              "--update, --relics, --serve", file=sys.stderr)
         return 1
 
     name = selected[0]
