@@ -280,7 +280,6 @@ def build_mastered_set(inv: dict) -> set[str]:
     1. ``XPInfo`` from the DE profile viewing API — items that contributed
        XP even if already sold (only present after a ``--refresh``).
     2. Any item with an ``XP`` field > 0 anywhere in the inventory.
-    3. Items in equipment sections — owned items that have been equipped.
 
     Returns:
         A set of lower-cased item paths.
@@ -294,6 +293,10 @@ def build_mastered_set(inv: dict) -> set[str]:
             leveled.add(path)
 
     # Source 2: any item with XP > 0 anywhere in the inventory.
+    # We walk the entire inventory recursively rather than just equipment
+    # sections so that items stored outside the usual slots are still
+    # caught.  Items with XP == 0 (freshly built, never equipped) are
+    # intentionally excluded.
     def _walk(obj):
         if isinstance(obj, dict):
             if "ItemType" in obj and obj.get("XP"):
@@ -304,14 +307,6 @@ def build_mastered_set(inv: dict) -> set[str]:
             for v in obj:
                 _walk(v)
     _walk(inv)
-
-    # Source 3: items in equipment sections (fallback — being equipped
-    # implies at least partial use).
-    for sect in EQUIPMENT_SECTIONS:
-        for eq in inv.get(sect, []):
-            path = (eq.get("ItemType") or "").lower()
-            if path:
-                leveled.add(path)
 
     return leveled
 

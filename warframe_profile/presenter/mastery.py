@@ -13,8 +13,7 @@ from prettytable import PrettyTable, TableStyle
 
 from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import (
-    ExportDB, load_data, load_inventory,
-    EQUIPMENT_SECTIONS,
+    ExportDB, load_data,
 )
 
 
@@ -132,8 +131,9 @@ def _build_ever_leveled(inv: dict) -> set[str]:
     2. Any item in the entire inventory that has an ``XP`` field > 0 —
        catches items that were formad / rank-up without requiring a live
        fetch (works from cached data).
-    3. Items in equipment sections — owned items that have at least been
-       equipped.
+
+    Items with ``XP`` = 0 (freshly built, never equipped) are not
+    included — ownership alone does not imply mastery.
     """
     leveled: set[str] = set()
 
@@ -156,14 +156,6 @@ def _build_ever_leveled(inv: dict) -> set[str]:
                 _walk(v)
 
     _walk(inv)
-
-    # Source 3: items in equipment sections (fallback for items without
-    # XP field — being in an equipment slot implies at least some use).
-    for sect in EQUIPMENT_SECTIONS:
-        for eq in inv.get(sect, []):
-            path = (eq.get("ItemType") or "").lower()
-            if path:
-                leveled.add(path)
 
     return leveled
 
