@@ -132,13 +132,18 @@ def _max_xp_for_item(item: dict) -> int:
     * Warframes, Archwings, Sentinels, Pets, Necramechs → base 2 000 → 930 000
     * Kuva / Tenet / Coda weapons (rank 40)           → base 1 000 → 820 000
     * Everything else (weapons, amps, etc.)            → base 1 000 → 465 000
+
+    In practice the game records slightly less cumulative XP than the
+    formula predicts (observed min ~97 %).  We use **95 %** of the
+    theoretical value as the cutoff to avoid false positives on max-rank
+    items.
     """
     cat = item.get("category", "")
     if cat in ("Warframes", "Archwing", "Sentinels", "Pets", "Necramech"):
-        return 930_000
+        return 883_500   # 930 000 × 0.95
     if _is_lich_item(item):
-        return 820_000
-    return 465_000
+        return 779_000   # 820 000 × 0.95
+    return 441_750       # 465 000 × 0.95
 
 
 def _item_xp(inv: dict, path: str) -> int:
