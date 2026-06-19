@@ -19,7 +19,7 @@ Core data-flow
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from warframe_profile.model.inventory import ExportDB, build_owned
+from warframe_profile.model.inventory import ExportDB, build_owned, build_mastered_set
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +286,7 @@ def _build_not_needed_part_names(
     inventory: dict,
     owned: dict[str, int],
     equipment_sections: list[str],
+    mastered: set[str] | None = None,
 ) -> set[str]:
     """Build a set of reward-style names for parts the player does NOT need.
 
@@ -298,12 +299,14 @@ def _build_not_needed_part_names(
     are either crafting materials (e.g. Orokin Cell), base weapons used as
     akimbo ingredients, or non-Prime items misclassified as Prime.
     """
-    # Determine which items have a finished copy.
+    # Determine which items have a finished copy (owned or mastered).
     owned_finished: set[str] = {
         normalize_path(eq.get("ItemType", ""))
         for sect in equipment_sections
         for eq in inventory.get(sect, [])
     }
+    if mastered:
+        owned_finished |= mastered
 
     # Compute extra builds needed for sub-craft dependencies.
     buildable_keys = {
@@ -408,6 +411,7 @@ def build_relics_map(
     prime_map: dict[str, dict],
     owned: dict[str, int],
     equipment_sections: list[str],
+    mastered: set[str] | None = None,
 ) -> list[RelicInfo]:
     """Cross-reference owned relics against needed prime parts.
 
@@ -422,6 +426,7 @@ def build_relics_map(
         prime_map:          Output of :func:`build_prime_map`.
         owned:              Output of :func:`build_owned`.
         equipment_sections: List of inventory sections with equipment.
+        mastered:           Items previously ranked up (even if sold).
 
     Returns:
         A list of :class:`RelicInfo`, sorted by tier then name.
@@ -438,6 +443,7 @@ def build_relics_map(
     # need anymore (enough copies owned for all required builds).
     not_needed = _build_not_needed_part_names(
         prime_map, inventory, owned, equipment_sections,
+        mastered=mastered,
     )
 
     results: list[RelicInfo] = []
@@ -522,6 +528,7 @@ def build_needed_drops(
     prime_map: dict[str, dict],
     owned: dict[str, int],
     equipment_sections: list[str],
+    mastered: set[str] | None = None,
 ) -> list[NeededPart]:
     """Identify needed prime parts and which owned relics can drop them.
 
@@ -539,6 +546,8 @@ def build_needed_drops(
         for sect in equipment_sections
         for eq in inventory.get(sect, [])
     }
+    if mastered:
+        owned_finished |= mastered
 
     buildable_keys = {
         un for un, info in prime_map.items()
@@ -718,6 +727,7 @@ def build_ingredient_index_craftable_to_owned(
     items: list[dict],
     inventory: dict,
     equipment_sections: list[str],
+    mastered: set[str] | None = None,
 ) -> set[str]:
     """Build a set of item uniqueNames that should *not* be sold.
 
@@ -729,15 +739,17 @@ def build_ingredient_index_craftable_to_owned(
     Two cases are covered (mirroring :func:`build_ingredient_index`):
 
     1. Items used as ingredients where at least one recipe result is
-       **not** already owned.
+       **not** already owned or mastered.
     2. Items whose own recipe requires a weapon as an ingredient **and**
-       the result is not already owned.
+       the result is not already owned or mastered.
     """
     owned_finished: set[str] = {
         normalize_path(eq.get("ItemType", ""))
         for sect in equipment_sections
         for eq in inventory.get(sect, [])
     }
+    if mastered:
+        owned_finished |= mastered
 
     weapon_uns: set[str] = {
         item["uniqueName"]
@@ -794,14 +806,17 @@ def _all_crafting_paths_lead_to_owned(
     owned_finished: set[str],
     ingredient_to_results: dict[str, set[str]],
     visited: set[str],
+    mastered: set[str] | None = None,
 ) -> bool:
-    """Return ``True`` if every item this *item_un* can craft into is already owned.
+    """Return ``True`` if every item this *item_un* can craft into is already owned
+    (or mastered, when *mastered* is provided).
 
     Recursively follows the recipe chain (component → sub-assembly → finished
-    item).  If *any* path leads to an unowned item, returns ``False``.
+    item).  If *any* path leads to an unowned and unmastered item, returns
+    ``False``.
     """
     norm = normalize_path(item_un)
-    if norm in owned_finished:
+    if norm in owned_finished or (mastered and norm in mastered):
         return True
 
     if item_un in visited:
@@ -815,6 +830,7 @@ def _all_crafting_paths_lead_to_owned(
     return all(
         _all_crafting_paths_lead_to_owned(
             r, owned_finished, ingredient_to_results, visited,
+            mastered=mastered,
         )
         for r in results
     )
@@ -827,11 +843,12 @@ def find_excess_blueprints_and_components(
     owned: dict[str, int],
     owned_finished: set[str],
     loc_dict: dict,
+    mastered: set[str] | None = None,
 ) -> list[ExcessItem]:
     """Identify blueprints and components the player can safely sell.
 
     A blueprint or component is *excess* when every finished item it can
-    ultimately be used to craft is already owned by the player.
+    ultimately be used to craft is already owned or mastered by the player.
 
     Returns:
         A list of :class:`ExcessItem` sorted by name.
@@ -864,6 +881,7 @@ def find_excess_blueprints_and_components(
 
         if _all_crafting_paths_lead_to_owned(
             bp_un, owned_finished, ingredient_to_results, set(),
+            mastered=mastered,
         ):
             item = items_by_un.get(bp_norm)
             name = (
@@ -896,6 +914,7 @@ def find_excess_blueprints_and_components(
 
         if _all_crafting_paths_lead_to_owned(
             item_un, owned_finished, ingredient_to_results, set(),
+            mastered=mastered,
         ):
             item_data = items_by_un.get(normalize_path(item_un))
             name = (
@@ -1160,6 +1179,7 @@ def analyze(
     inventory: dict,
     prime_map: dict[str, dict],
     equipment_sections: list[str],
+    mastered: set[str] | None = None,
 ) -> AnalysisResult:
     """Cross-reference *inventory* against *prime_map*.
 
@@ -1172,6 +1192,10 @@ def analyze(
        against required parts and classify the item as ``"have_copy"``,
        ``"buildable"``, ``"partial"``, or silently skip it (if no parts
        owned and not yet masterable).
+
+    When *mastered* is provided, items the player has previously ranked
+    up (even if sold) are treated as "owned" for the purpose of the
+    extra-build and status calculations.
     """
     # Phase 0: flatten owned items into a lookup.
     owned = build_owned(inventory)
@@ -1182,6 +1206,8 @@ def analyze(
         for sect in equipment_sections
         for eq in inventory.get(sect, [])
     }
+    if mastered:
+        owned_finished |= mastered
 
     # Phase 1: compute extra builds required for sub-craft dependencies.
     buildable_keys = {

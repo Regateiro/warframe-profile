@@ -23,6 +23,7 @@ _COMMAND_TABLE = {
     "update":  ("warframe_profile.scripts.update_export_db",    "main"),
     "relics":  ("warframe_profile.presenter.cli",               "relics_main"),
     "serve":   ("warframe_profile.presenter.web_server",        "main"),
+    "mastery": ("warframe_profile.presenter.mastery",            "main"),
 }
 
 
@@ -44,6 +45,8 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Relic drop analysis")
     mode.add_argument("--serve",   action="store_true",
                        help="Start web UI server")
+    mode.add_argument("--mastery", action="store_true",
+                       help="Mastery rank progression & farming guide")
 
     # -- Shared options (used by multiple sub-commands).
     shared = parser.add_argument_group("shared options")
@@ -89,7 +92,8 @@ def main() -> int:
 
     # Find the single flag that was set.
     selected = [name for name in ("craft", "ducats", "cleanup",
-                                   "update", "relics", "serve")
+                                   "update", "relics", "serve",
+                                   "mastery")
                 if getattr(args, name)]
 
     if args.refresh and not selected:
@@ -100,7 +104,7 @@ def main() -> int:
     if len(selected) != 1:
         parser.print_help()
         print("\nSpecify exactly one of: --craft, --ducats, --cleanup, "
-              "--update, --relics, --serve", file=sys.stderr)
+              "--update, --relics, --serve, --mastery", file=sys.stderr)
         return 1
 
     name = selected[0]

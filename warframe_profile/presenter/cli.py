@@ -19,6 +19,7 @@ from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import (
     ExportDB, fetch_de_profile, EQUIPMENT_SECTIONS, load_data,
     InventoryFetchError, ProfileNotFoundError, WarframeNotRunningError,
+    build_mastered_set,
 )
 from warframe_profile.model.analysis import (
     build_prime_map, analyze, build_relics_map, build_needed_drops,
@@ -54,8 +55,11 @@ def _run(
     except (ProfileNotFoundError, InventoryFetchError) as e:
         print(f"  Warning: {e}", file=sys.stderr)
 
+    # Build mastered set (items ever ranked up, even if sold).
+    mastered = build_mastered_set(inv)
+
     # Run core analysis.
-    data = analyze(inv, prime_map, EQUIPMENT_SECTIONS)
+    data = analyze(inv, prime_map, EQUIPMENT_SECTIONS, mastered=mastered)
 
     # Compute sellable equipment index.
     data.sellable = compute_sellable_equipment(
@@ -70,10 +74,10 @@ def _run(
 
     # --relics mode: show relic tables only.
     needed = build_needed_drops(items, inv, prime_map, owned,
-                                EQUIPMENT_SECTIONS)
+                                EQUIPMENT_SECTIONS, mastered=mastered)
     print_needed_drops(needed)
     relics = build_relics_map(items, inv, prime_map, owned,
-                              EQUIPMENT_SECTIONS)
+                              EQUIPMENT_SECTIONS, mastered=mastered)
     print_safe_relics(relics)
 
 

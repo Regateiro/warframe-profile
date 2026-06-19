@@ -273,6 +273,49 @@ def fetch_de_profile(account_id: str) -> dict:
 # Summary / aggregation helpers
 # ---------------------------------------------------------------------------
 
+def build_mastered_set(inv: dict) -> set[str]:
+    """Return normalised paths of every item the player has ever ranked up.
+
+    Sources:
+    1. ``XPInfo`` from the DE profile viewing API — items that contributed
+       XP even if already sold (only present after a ``--refresh``).
+    2. Any item with an ``XP`` field > 0 anywhere in the inventory.
+    3. Items in equipment sections — owned items that have been equipped.
+
+    Returns:
+        A set of lower-cased item paths.
+    """
+    leveled: set[str] = set()
+
+    # Source 1: XPInfo from profile (mastered-and-sold items).
+    for entry in inv.get("XPInfo") or []:
+        path = (entry.get("ItemType") or "").lower()
+        if path:
+            leveled.add(path)
+
+    # Source 2: any item with XP > 0 anywhere in the inventory.
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if "ItemType" in obj and obj.get("XP"):
+                leveled.add(obj["ItemType"].lower())
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _walk(v)
+    _walk(inv)
+
+    # Source 3: items in equipment sections (fallback — being equipped
+    # implies at least partial use).
+    for sect in EQUIPMENT_SECTIONS:
+        for eq in inv.get(sect, []):
+            path = (eq.get("ItemType") or "").lower()
+            if path:
+                leveled.add(path)
+
+    return leveled
+
+
 def inventory_summary(inv: dict) -> tuple[int, int, int]:
     """Return ``(misc_count, recipe_count, equipment_count)``."""
     misc = len(inv.get("MiscItems", []))
@@ -301,20 +344,45 @@ def build_owned(inventory: dict) -> defaultdict[str, int]:
     return owned
 
 
+def merge_profile_data(inv: dict, profile: dict) -> None:
+    """Merge DE profile viewing data into *inv*.
+
+    Adds/updates:
+    * ``PlayerLevel`` (Mastery Rank).
+    * ``XPInfo`` — the canonical list of every item the player has ever
+      ranked up, including items no longer owned.
+
+    This data is needed by the ``--mastery`` sub-command to determine
+    which items have been mastered vs never touched.
+    """
+    inv["PlayerLevel"] = profile.get("PlayerLevel", inv.get("PlayerLevel", 0))
+    xp_info = profile.get("XPInfo", [])
+    if xp_info:
+        inv["XPInfo"] = xp_info
+
+
 def load_inventory_with_fallback(
     inv_path: str, refresh: bool = False,
 ) -> tuple[dict, str | None]:
     """Return inventory — either freshly fetched or from the local cache.
 
     When *refresh* is ``True`` (or the cache file is missing) the
-    function fetches live data from the Warframe process, saves it,
-    and prints a summary to stderr.  Otherwise the cached file is loaded.
+    function fetches live data from the Warframe process, also fetches
+    the DE profile viewing data (for mastery tracking), merges them,
+    saves, and prints a summary to stderr.  Otherwise the cached file
+    is loaded.
 
     Returns:
         ``(inventory_dict, account_id_or_None)``.
     """
     if refresh or not os.path.exists(inv_path):
         inv, account_id = fetch_inventory()
+        try:
+            profile = fetch_de_profile(account_id)
+            merge_profile_data(inv, profile)
+        except (ProfileNotFoundError, InventoryFetchError) as e:
+            print(f"  Warning: could not fetch profile data: {e}",
+                  file=sys.stderr)
         with open(inv_path, "w") as f:
             json.dump(inv, f, indent=2)
         misc, rec, equip = inventory_summary(inv)

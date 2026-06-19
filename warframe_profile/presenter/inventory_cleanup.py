@@ -12,7 +12,7 @@ Identifies items and parts you can safely sell:
 import sys
 
 from warframe_profile.model.inventory import (
-    EQUIPMENT_SECTIONS, load_data, build_owned,
+    EQUIPMENT_SECTIONS, load_data, build_owned, build_mastered_set,
 )
 from warframe_profile.model.analysis import (
     build_prime_map, build_item_index, compute_sellable_equipment,
@@ -60,9 +60,14 @@ def main(args) -> None:
         for sect in EQUIPMENT_SECTIONS
         for eq in inv.get(sect, [])
     }
+    mastered = build_mastered_set(inv)
+    if mastered:
+        owned_finished |= mastered
+
     excess = find_excess_blueprints_and_components(
         inv, items_by_un, db.recipes, build_owned(inv),
         owned_finished, {},
+        mastered=mastered,
     )
     section_excess_blueprints_components(excess)
 
