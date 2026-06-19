@@ -118,6 +118,58 @@ def _tier_index(item: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+# XP helpers — estimate max rank from cumulative XP
+# ---------------------------------------------------------------------------
+
+def _max_xp_for_item(item: dict) -> int:
+    """Return the expected cumulative XP when *item* reaches max rank.
+
+    Warframe's XP-per-rank curve is linear:
+        XP needed for rank N = N × base_rate
+
+    Total cumulative XP at rank R = base × R × (R + 1) / 2.
+
+    * Warframes, Archwings, Sentinels, Pets, Necramechs → base 2 000 → 930 000
+    * Kuva / Tenet / Coda weapons (rank 40)           → base 1 000 → 820 000
+    * Everything else (weapons, amps, etc.)            → base 1 000 → 465 000
+    """
+    cat = item.get("category", "")
+    if cat in ("Warframes", "Archwing", "Sentinels", "Pets", "Necramech"):
+        return 930_000
+    if _is_lich_item(item):
+        return 820_000
+    return 465_000
+
+
+def _item_xp(inv: dict, path: str) -> int:
+    """Return the cumulative XP recorded for *path* across the inventory.
+
+    Checks ``XPInfo`` first (canonical, survives selling), then falls
+    back to any equipment slot with an ``XP`` field.
+    """
+    for entry in inv.get("XPInfo") or []:
+        if (entry.get("ItemType") or "").lower() == path:
+            return entry.get("XP") or 0
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            if (obj.get("ItemType") or "").lower() == path and obj.get("XP"):
+                return obj["XP"]
+            for v in obj.values():
+                result = _walk(v)
+                if result:
+                    return result
+        elif isinstance(obj, list):
+            for v in obj:
+                result = _walk(v)
+                if result:
+                    return result
+        return 0
+
+    return _walk(inv)
+
+
+# ---------------------------------------------------------------------------
 # Mastery analysis
 # ---------------------------------------------------------------------------
 
@@ -163,17 +215,22 @@ def _build_ever_leveled(inv: dict) -> set[str]:
 def analyze_mastery(
     db: ExportDB,
     inv: dict,
-) -> tuple[int, int, list[tuple[dict, int]]]:
+) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]]]:
     """Cross-reference player progress against the masterable item list.
+
+    Items are classified into three buckets:
+
+    * **Mastered** — cumulative XP >= the expected max for that item type.
+    * **In progress** — some XP but below the max threshold.
+    * **Never touched** — no XP at all.
 
     Args:
         db:  Loaded game export database.
         inv: Player inventory dict (may contain ``XPInfo`` from profile).
 
     Returns:
-        ``(total_masterable, mastered_count, [(item_dict, tier_index), ...])``
-        where the last list contains only *unmastered* items, each paired
-        with its tier index for sorting.
+        ``(total, mastered_count, unmastered, in_progress)``
+        where the last two are ``[(item_dict, tier_index), ...]`` lists.
     """
     ever_leveled = _build_ever_leveled(inv)
 
@@ -195,17 +252,23 @@ def analyze_mastery(
 
     mastered = 0
     unmastered: list[tuple[dict, int]] = []
+    in_progress: list[tuple[dict, int]] = []
 
     for item in masterable:
         un = item["uniqueName"].lower()
-        if un in ever_leveled:
-            mastered += 1
-        else:
+        if un not in ever_leveled:
             unmastered.append((item, _tier_index(item)))
+        else:
+            xp = _item_xp(inv, un)
+            if xp >= _max_xp_for_item(item):
+                mastered += 1
+            else:
+                in_progress.append((item, _tier_index(item)))
 
     unmastered.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
+    in_progress.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
 
-    return len(masterable), mastered, unmastered
+    return len(masterable), mastered, unmastered, in_progress
 
 
 # ---------------------------------------------------------------------------
@@ -216,53 +279,70 @@ def print_report(
     total: int,
     mastered: int,
     unmastered: list[tuple[dict, int]],
+    in_progress: list[tuple[dict, int]],
 ) -> None:
     """Print the full mastery progression report."""
-    remaining = total - mastered
+    remaining = len(unmastered) + len(in_progress)
 
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
     print("=" * 68)
     print(f"  {mastered} / {total} masterable items mastered "
           f"({mastered * 100 // total}%)")
-    print(f"  {remaining} items never ranked up")
-
-    total_mr = sum(_item_mr(item) for item, _ in unmastered)
+    print(f"  {len(unmastered)} items never touched"
+          f"  {len(in_progress)} in progress"
+          f"  {remaining} remaining")
+    total_mr = (
+        sum(_item_mr(item) for item, _ in unmastered)
+        + sum(_item_mr(item) for item, _ in in_progress)
+    )
     print(f"  ~{total_mr:,} MR available from unmastered items")
     print()
 
-    # Group unmastered items by tier for display.
-    tier_items: list[list[dict]] = [[] for _ in TIERS]
-    for item, t_idx in unmastered:
-        tier_items[t_idx].append(item)
-
-    for t_idx, (tier, items) in enumerate(zip(TIERS, tier_items)):
+    # Group by tier for display.
+    def _print_section(
+        header: str,
+        desc: str,
+        items: list[tuple[dict, int]],
+        show_detail: bool = True,
+    ) -> None:
         if not items:
-            continue
+            return
+        tier_groups: list[list[dict]] = [[] for _ in TIERS]
+        for item, t_idx in items:
+            tier_groups[t_idx].append(item)
 
-        count = len(items)
-        mr = sum(_item_mr(i) for i in items)
-        print(f"{'─' * 68}")
-        print(f"  {tier['label']}")
-        print(f"  {tier['desc']}")
-        print(f"  {count} items  ~{mr:,} MR")
-        print()
+        for t_idx, (tier, group) in enumerate(zip(TIERS, tier_groups)):
+            if not group:
+                continue
+            count = len(group)
+            mr = sum(_item_mr(i) for i in group)
+            print(f"{'─' * 68}")
+            label = f"{header} — {tier['label']}" if show_detail else header
+            print(f"  {label}")
+            if show_detail:
+                print(f"  {tier['desc']}")
+            print(f"  {count} items  ~{mr:,} MR")
+            print()
 
-        t = PrettyTable()
-        t.set_style(TableStyle.DEFAULT)
-        t.field_names = ["Item", "Category", "MR"]
-        t.align["Item"] = "l"
-        t.align["Category"] = "l"
-        t.align["MR"] = "r"
+            t = PrettyTable()
+            t.set_style(TableStyle.DEFAULT)
+            t.field_names = ["Item", "Category", "MR"]
+            t.align["Item"] = "l"
+            t.align["Category"] = "l"
+            t.align["MR"] = "r"
 
-        for item in items:
-            name = item.get("name", item.get("uniqueName", "?"))
-            cat = item.get("category", "")
-            mr_val = _item_mr(item)
-            t.add_row([name, cat, mr_val])
+            for item in group:
+                name = item.get("name", item.get("uniqueName", "?"))
+                cat = item.get("category", "")
+                mr_val = _item_mr(item)
+                t.add_row([name, cat, mr_val])
 
-        print(t)
-        print()
+            print(t)
+            print()
+
+    _print_section("NEVER TOUCHED", "No XP recorded", unmastered)
+    _print_section("IN PROGRESS", "Partial XP, not yet max rank", in_progress)
 
     print("=" * 68)
     print(f"  {remaining} items remaining  ~{total_mr:,} MR to earn")
@@ -280,5 +360,5 @@ def main(args) -> None:
         args.inventory, args.refresh,
     )
 
-    total, mastered, unmastered = analyze_mastery(db, inv)
-    print_report(total, mastered, unmastered)
+    total, mastered, unmastered, in_progress = analyze_mastery(db, inv)
+    print_report(total, mastered, unmastered, in_progress)
