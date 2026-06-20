@@ -138,6 +138,11 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
                 if comps:
                     merged["components"] = _strip_drops(comps)
 
+            # Amp prisms contribute MR (gilded amp) but WFCD marks them
+            # masterable=False — correct it here.
+            if "OperatorAmplifiers" in un and "Barrel" in un:
+                merged["masterable"] = True
+
             items.append(merged)
 
     # Pass 2: add WFCD items not present in DE export.
@@ -174,6 +179,8 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
         rewards = wfcd_item.get("rewards")
         if rewards:
             merged["rewards"] = rewards
+        if "OperatorAmplifiers" in un and "Barrel" in un:
+            merged["masterable"] = True
         items.append(merged)
 
     # Combine everything into the final output.

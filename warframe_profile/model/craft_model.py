@@ -379,19 +379,34 @@ def resolve_tree(
             for k, v in sub_craft.items():
                 if k in craftables:
                     craftables[k]["quantity"] += v["quantity"]
-                    craftables[k]["num_crafts"] += v["num_crafts"]
                 else:
                     craftables[k] = dict(v)
         else:
+            # Check if this component has a recipe (is craftable)
+            is_craftable = should_expand(
+                comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
+            )
             name = _display_name(comp, items_by_un, item_name, loc_dict)
-            if comp_un_lower in result:
-                result[comp_un_lower]["quantity"] += total
+            if is_craftable:
+                if comp_un_lower in craftables:
+                    craftables[comp_un_lower]["quantity"] += total
+                else:
+                    comp_recipe = recipes_by_result.get(comp_un_lower, {})
+                    craftables[comp_un_lower] = {
+                        "name": name,
+                        "quantity": total,
+                        "owned": comp_owned,
+                        "build_qty": comp_recipe.get("num", 1) or 1,
+                    }
             else:
-                result[comp_un_lower] = {
-                    "name": name,
-                    "quantity": total,
-                    "owned": comp_owned,
-                }
+                if comp_un_lower in result:
+                    result[comp_un_lower]["quantity"] += total
+                else:
+                    result[comp_un_lower] = {
+                        "name": name,
+                        "quantity": total,
+                        "owned": comp_owned,
+                    }
 
     return result, craftables
 
@@ -434,6 +449,100 @@ def _merge_dicts(acc: dict, src: dict, *fields: str) -> None:
                 acc[k][f] += v.get(f, 0)
         else:
             acc[k] = dict(v)
+
+
+# ---------------------------------------------------------------------------
+# Post-processing pipeline
+# ---------------------------------------------------------------------------
+
+def compute_crafting_plan(craftables: dict, owned: dict) -> dict:
+    """Compute ``num_crafts`` for each craftable from remaining after owned.
+
+    *craftables* is mutated in place and returned.
+    """
+    for v in craftables.values():
+        bq = v.get("build_qty", 1) or 1
+        oq = v.get("owned", 0)
+        remaining = max(0, v["quantity"] - oq)
+        v["num_crafts"] = max(1, math.ceil(remaining / bq))
+    return craftables
+
+
+def decompose_raw_materials(
+    craftables: dict,
+    recipes_by_result: dict,
+    items_by_un: dict,
+    owned: dict,
+    loc_dict: dict,
+) -> dict:
+    """Decompose corrected *craftables* into raw material requirements.
+
+    Blueprint entries for each craftable are also added when the blueprint
+    is not yet owned.  Returns a ``{un_lower: {name, quantity, owned}}``
+    dict of non-craftable ingredients only.
+    """
+    craftable_keys = set(craftables.keys())
+    requirements: dict = {}
+
+    for craft_key, craft_info in craftables.items():
+        num_crafts = craft_info.get("num_crafts", 0)
+        if num_crafts == 0:
+            continue
+
+        recipe = recipes_by_result.get(craft_key)
+        if not recipe:
+            continue
+
+        # Blueprint for this craftable
+        bp_key = recipe.get("_recipeKey", "")
+        if bp_key:
+            bp_lower = bp_key.lower()
+            bp_owned = owned.get(normalize_path(bp_key), 0)
+            if bp_owned < 1 and bp_lower not in requirements:
+                requirements[bp_lower] = {
+                    "name": f"{craft_info['name']} Blueprint",
+                    "quantity": 1,
+                    "owned": bp_owned,
+                }
+
+        # Raw ingredients
+        for ing in recipe.get("ingredients", []):
+            ing_type = ing["ItemType"]
+            ing_lower = ing_type.lower()
+
+            if ing_lower in craftable_keys:
+                continue
+
+            total = num_crafts * ing["ItemCount"]
+            ing_norm = normalize_path(ing_type)
+
+            if ing_lower in requirements:
+                requirements[ing_lower]["quantity"] += total
+            else:
+                item = items_by_un.get(ing_lower, {})
+                ing_name = (
+                    resolve_name(item.get("name", ""), loc_dict)
+                    if item else _un_to_name(ing_type)
+                )
+                requirements[ing_lower] = {
+                    "name": ing_name,
+                    "quantity": total,
+                    "owned": owned.get(ing_norm, 0),
+                }
+
+    return requirements
+
+
+def preserve_blueprints(
+    all_requirements: dict,
+    new_requirements: dict,
+) -> dict:
+    """Carry over any blueprint entries from *all_requirements* not already
+    covered by the raw-material decomposition."""
+    for k, v in all_requirements.items():
+        if k not in new_requirements and _is_blueprint_un(k):
+            new_requirements[k] = dict(v)
+    return new_requirements
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +615,7 @@ def build_weapon_chains(
             recipes_by_result, loc_dict, max_depth=max_depth,
         )
         _merge_dicts(all_requirements, req, "quantity")
-        _merge_dicts(all_craftables, craft, "quantity", "num_crafts")
+        _merge_dicts(all_craftables, craft, "quantity")
 
         recipe = recipes_by_result.get(final_un.lower())
         if recipe:
@@ -529,5 +638,7 @@ def build_weapon_chains(
                         }
 
         shown += 1
+
+    compute_crafting_plan(all_craftables, owned)
 
     return chains, all_requirements, all_craftables, shown

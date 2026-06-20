@@ -27,22 +27,29 @@ TIERS = [
         "label": "Tier 1 — Sentinels, Pets, K-Drives, Kitguns",
         "desc": "Quick wins: buy blueprints from Market or Fortuna, easy materials",
         "filter": lambda i: (
-            i.get("category") in ("Sentinels", "Pets")
-            or (i.get("category") == "Misc")
+            not i.get("isPrime")
+            and (
+                i.get("category") in ("Sentinels", "Pets")
+                or i.get("category") == "Misc"
+            )
         ),
     },
     {
         "id": "2",
         "label": "Tier 2 — Archwing & Arch-Melee",
         "desc": "Clan research / Archwing missions / Cephalon Simaris",
-        "filter": lambda i: i.get("category") in ("Archwing", "Arch-Melee"),
+        "filter": lambda i: (
+            not i.get("isPrime")
+            and i.get("category") in ("Archwing", "Arch-Melee")
+        ),
     },
     {
         "id": "3",
         "label": "Tier 3 — Syndicate Weapons & Arch-Gun",
         "desc": "Spend syndicate standing; Arch-guns from syndicates, clan research, vents",
         "filter": lambda i: (
-            (_has_tag(i, "Syndicate") or i.get("category") == "Arch-Gun")
+            not i.get("isPrime")
+            and (_has_tag(i, "Syndicate") or i.get("category") == "Arch-Gun")
             and not _is_lich_item(i)
         ),
     },
@@ -89,18 +96,29 @@ def _has_tag(item: dict, tag: str) -> bool:
 
 
 def _is_lich_item(item: dict) -> bool:
-    """Return True if this is a Kuva / Tenet / Coda weapon (rank 40)."""
+    """Return True if this is a Kuva / Tenet / Coda / Paracesis weapon (rank 40)."""
     name = item.get("name", "")
-    return any(name.startswith(p) for p in ("Kuva ", "Tenet ", "Coda ", "Dual Coda "))
+    if any(name.startswith(p) for p in ("Kuva ", "Tenet ", "Coda ", "Dual Coda ")):
+        return True
+    un = item.get("uniqueName", "")
+    return "BallasSword" in un
+
+
+def _is_necramech(item: dict) -> bool:
+    """Return True if this is a Necramech (rank 40 warframe-like)."""
+    return item.get("productCategory") == "MechSuits"
 
 
 def _item_mr(item: dict) -> int:
     """Return the total Mastery Rank contribution of a single item.
 
+    * Necramechs: 8,000 (rank 40, 200 MR/rank).
     * Warframes, Archwings, Sentinels, Pets: 6,000 (rank 30).
     * Kuva / Tenet / Coda weapons: 4,000 (rank 40).
     * Everything else: 3,000 (rank 30).
     """
+    if _is_necramech(item):
+        return 8_000
     cat = item.get("category", "")
     if cat in ("Warframes", "Archwing", "Sentinels", "Pets"):
         return 6_000
@@ -117,9 +135,136 @@ def _tier_index(item: dict) -> int:
     return len(TIERS) - 1
 
 
-# ---------------------------------------------------------------------------
-# XP helpers — estimate max rank from cumulative XP
-# ---------------------------------------------------------------------------
+def _item_source(item: dict) -> str:
+    """Return the acquisition source label for *item*."""
+    name = item.get("name", "")
+    un = item.get("uniqueName", "")
+    tags = {str(t) for t in (item.get("tags") or [])}
+
+    # ── Tags with unambiguous mapping ──────────────────────────────
+    # ── Tag-based Lich / Sister / Coda detection ───────────────────
+    # (some Coda/Kuva/Tenet items lack the correct tag in the export DB,
+    # so we also check via _is_lich_item as a fallback)
+    if "Technocyte Coda" in tags:
+        return "Coda"
+    if "Kuva Lich" in tags:
+        return "Lich"
+    if "Tenet" in tags:
+        return "Sister"
+    if _is_lich_item(item):
+        name_prefix = name.split(" ")[0]
+        if name_prefix in ("Kuva",):
+            return "Lich"
+        if name_prefix in ("Tenet",):
+            return "Sister"
+        if name_prefix in ("Coda",) or name.startswith("Dual Coda"):
+            return "Coda"
+    if "Invasion Reward" in tags:
+        return "Invasion"
+    if "Stalker" in tags:
+        return "Stalker"
+    if "Cephalon Simaris" in tags:
+        return "Simaris"
+    if "Baro" in tags:
+        return "Baro Ki'teer"
+    if "Dax" in tags or "Duviri" in tags:
+        return "Duviri Circuit"
+    if "Zariman" in tags:
+        return "Zariman (Holdfasts)"
+    if "Entrati" in tags:
+        return "Deimos (Entrati)"
+
+    for synd in ("Steel Meridian", "Red Veil", "Perrin Sequence",
+                 "New Loka", "Cephalon Suda", "Arbiters of Hexis"):
+        if synd in tags:
+            return f"Syndicate ({synd})"
+
+    # ── uniqueName path patterns ───────────────────────────────────
+    if "ClanTech" in un:
+        return "Dojo Research"
+    if "MK1Series" in un:
+        return "Market (Credits)"
+    if "/Ostron/" in un:
+        return "Cetus (Ostron)"
+    if "/SolarisUnited/" in un:
+        return "Fortuna (Solaris)"
+    if "ThanoTech" in un or "Thanotech" in un:
+        return "Deimos (Entrati)"
+    if "/VoidTrader/" in un:
+        return "Baro Ki'teer"
+    if "/Archon/" in un:
+        return "Archon Hunt"
+    if "/Lasria/" in un:
+        return "1999"
+    if "/Conclave/" in un:
+        return "Conclave"
+    if "/Vehicles/Hoverboard" in un:
+        return "Fortuna (Ventkids)"
+
+    if "OperatorAmplifiers" in un and "Barrel" in un:
+        if "CorpAmp" in un:
+            return "Fortuna (Vox Solaris)"
+        return "Cetus (Quills)"
+
+    # ── Name patterns ──────────────────────────────────────────────
+    if name.startswith("Dex "):
+        return "Daily Tribute"
+    if name.startswith("MK1-"):
+        return "Market (Credits)"
+    if name.startswith("Prisma "):
+        return "Baro Ki'teer"
+    if name == "Excalibur Umbra":
+        return "Quest (The Second Dream)"
+
+    # Login / daily tribute rewards
+    if name in ("Azima", "Zenistar", "Zenith", "Sigma & Octantis"):
+        return "Daily Tribute"
+
+    # Known quest rewards
+    if name in ("Broken War", "Broken Scepter", "Skiajati",
+                "Paracesis", "Nataruk", "Sirocco", "Xoris",
+                "Orvius", "Shedu"):
+        return "Quest"
+
+    # Sentinel and companion weapons — purchase from Market
+    if "/Sentinels/SentinelWeapons" in un:
+        return "Market"
+    if "/MoaPets/" in un and "Weapon" in un:
+        return "Fortuna (Solaris)"
+
+    # Nightwave / special event
+    if name == "Wolf Sledge":
+        return "Nightwave"
+
+    # ── Necramechs ─────────────────────────────────────────────────
+    if _is_necramech(item):
+        return "Deimos (Necraloid)"
+
+    # ── Category fallbacks ─────────────────────────────────────────
+    cat = item.get("category", "")
+    # Prime check must come before individual category checks so that
+    # Prime Sentinels (cat="Sentinels"), Prime Archwings, etc. get
+    # "Relics" instead of "Market" / "Dojo Research".
+    if item.get("isPrime"):
+        return "Relics"
+    if cat in ("Sentinels", "Pets"):
+        return "Market"
+    if cat in ("Archwing", "Arch-Melee"):
+        return "Dojo Research"
+
+    # ── Base warframes ─────────────────────────────────────────────
+    if cat == "Warframes":
+        return "Market"
+
+    # ── General weapon fallback ────────────────────────────────────
+    # Most Primary / Secondary / Melee weapons are credit blueprints
+    # from the Market.  More specific sources (Dojo, Syndicate,
+    # Baro, Invasion, etc.) are caught above.
+    if cat in ("Primary", "Secondary", "Melee", "Arch-Gun"):
+        return "Market"
+
+    # catch-all
+    return "Various"
 
 def _max_xp_for_item(item: dict) -> int:
     """Return the expected cumulative XP when *item* reaches max rank.
@@ -127,12 +272,17 @@ def _max_xp_for_item(item: dict) -> int:
     Warframe's XP-per-rank curve is quadratic (per the official wiki):
         Cumulative XP at rank R = base × R²
 
-    * Warframes, Archwings, Sentinels, Pets, Necramechs → base 1 000 → rank 30 = **900 000**
-    * Kuva / Tenet / Coda weapons (rank 40)             → base 500   → rank 40 = **800 000**
-    * Everything else (weapons, amps, etc.)              → base 500   → rank 30 = **450 000**
+    * Necramechs (rank 40)             → base 1 000 → rank 40 = **1 600 000**
+    * Warframes, Archwings, Sentinels,
+      Pets                             → base 1 000 → rank 30 = **900 000**
+    * Kuva / Tenet / Coda weapons
+      (rank 40)                        → base 500   → rank 40 = **800 000**
+    * Everything else (weapons, amps)   → base 500   → rank 30 = **450 000**
     """
+    if _is_necramech(item):
+        return 1_600_000
     cat = item.get("category", "")
-    if cat in ("Warframes", "Archwing", "Sentinels", "Pets", "Necramech"):
+    if cat in ("Warframes", "Archwing", "Sentinels", "Pets"):
         return 900_000
     if _is_lich_item(item):
         return 800_000
@@ -165,6 +315,51 @@ def _item_xp(inv: dict, path: str) -> int:
         return 0
 
     return _walk(inv)
+
+
+def _modular_features(inv: dict, component_path: str) -> int | None:
+    """Return the ``Features`` bitmask of the modular weapon using *component_path*.
+
+    Searches inventory sections that can hold modular or pet items for an item
+    whose ``ModularParts`` list contains *component_path*, or whose ``ItemType``
+    matches it directly (for companion pets that are themselves masterable).
+
+    The ``Features`` field is a bitmask whose lower bits are:
+
+    * ``1``  — Orokin Catalyst / Reactor installed
+    * ``2``  — Forma applied
+    * ``4``  — (unknown / unused in this data)
+    * ``8``  — **Gilded** (modular items — required for MR)
+    """
+    needle = component_path.lower()
+
+    for sec in (
+        "OperatorAmps",
+        "Primary",
+        "Secondary",
+        "Melee",
+        "MoaPets",
+        "KubrowPets",
+    ):
+        for item in inv.get(sec) or []:
+            if not isinstance(item, dict):
+                continue
+            # Match via ModularParts (amp prisms, zaw strikes, kitgun
+            # chambers, MOA heads, K-drive parts).
+            parts = item.get("ModularParts") or []
+            if any(p.lower() == needle for p in parts):
+                return item.get("Features")
+            # Direct ItemType match: only for items that have ModularParts
+            # (companion pets like Predasites / Vulpaphylas / MOAs).  Regular
+            # pets, weapons and K-drives don't have ModularParts and should
+            # never be subject to a gilding check.
+            if (
+                item.get("ModularParts")
+                and (item.get("ItemType") or "").lower() == needle
+            ):
+                return item.get("Features")
+
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +436,22 @@ def analyze_mastery(
         "/Lotus/Weapons/Tenno/Melee/LongSword/SkanaPrime",  # Skana Prime
     })
 
-    masterable = [
-        i for i in db.items
-        if i.get("masterable") is True
-        and i.get("uniqueName")
-        and i["uniqueName"] not in _UNOBTAINABLE_PATHS
-    ]
+    masterable = []
+    for item in db.items:
+        un = item.get("uniqueName")
+        if not un or un in _UNOBTAINABLE_PATHS:
+            continue
+        is_masterable = item.get("masterable") is True
+        # Amp prisms are components whose game export entry erroneously has
+        # masterable=False.  They contribute 3 000 MR (same as a secondary
+        # weapon) when the completed amp is gilded and levelled to 30.
+        # Skip blueprint entries — they have empty names and the real
+        # non-blueprint prism entry will be picked up instead.
+        if not is_masterable and "OperatorAmplifiers" in un and "Barrel" in un:
+            if "Blueprint" not in un:
+                is_masterable = True
+        if is_masterable:
+            masterable.append(item)
 
     mastered = 0
     unmastered: list[tuple[dict, int]] = []
@@ -258,7 +463,16 @@ def analyze_mastery(
             unmastered.append((item, _tier_index(item)))
         else:
             xp = _item_xp(inv, un)
-            if xp >= _max_xp_for_item(item):
+            max_xp = _max_xp_for_item(item)
+
+            # Modular components (amp prisms, zaw strikes, kitgun chambers)
+            # must be gilded before they contribute MR.  If the assembled
+            # weapon is currently in the inventory and NOT gilded, the
+            # component cannot be mastered regardless of total XP.
+            features = _modular_features(inv, item["uniqueName"])
+            if features is not None and (features & 8) == 0:
+                in_progress.append((item, _tier_index(item)))
+            elif xp >= max_xp:
                 mastered += 1
             else:
                 in_progress.append((item, _tier_index(item)))
@@ -325,16 +539,18 @@ def print_report(
 
             t = PrettyTable()
             t.set_style(TableStyle.DEFAULT)
-            t.field_names = ["Item", "Category", "MR"]
+            t.field_names = ["Item", "Category", "MR", "Source"]
             t.align["Item"] = "l"
             t.align["Category"] = "l"
             t.align["MR"] = "r"
+            t.align["Source"] = "l"
 
             for item in group:
                 name = item.get("name", item.get("uniqueName", "?"))
                 cat = item.get("category", "")
                 mr_val = _item_mr(item)
-                t.add_row([name, cat, mr_val])
+                src = _item_source(item)
+                t.add_row([name, cat, mr_val, src])
 
             print(t)
             print()

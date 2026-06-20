@@ -18,6 +18,7 @@ from warframe_profile.model.craft_model import (
     build_items_by_un, build_recipes_by_result, build_lookup,
     find_items, categorize, resolve_tree, build_weapon_chains, _merge_dicts,
     _weapon_name,
+    compute_crafting_plan, decompose_raw_materials, preserve_blueprints,
 )
 from warframe_profile.view.report import (
     GREEN, RED, YELLOW, RESET,
@@ -181,7 +182,14 @@ def main(args) -> None:
                     }
 
         _merge_dicts(all_requirements, req, "quantity")
-        _merge_dicts(all_craftables, craft, "quantity", "num_crafts")
+        _merge_dicts(all_craftables, craft, "quantity")
+
+    compute_crafting_plan(all_craftables, owned)
+    old_requirements = dict(all_requirements)
+    all_requirements = decompose_raw_materials(
+        all_craftables, recipes_by_result, items_by_un, owned, loc_dict,
+    )
+    all_requirements = preserve_blueprints(old_requirements, all_requirements)
 
     if not all_requirements:
         return
