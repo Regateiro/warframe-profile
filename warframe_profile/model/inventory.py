@@ -319,8 +319,53 @@ def inventory_summary(inv: dict) -> tuple[int, int, int]:
     return misc, rec, equip
 
 
-def build_owned(inventory: dict) -> defaultdict[str, int]:
+def parse_pending_recipes(
+    inventory: dict,
+    recipes: dict | None = None,
+) -> defaultdict[str, int]:
+    """Parse ``PendingRecipes`` from inventory — items currently in the foundry.
+
+    Each pending recipe is an item being built.  When *recipes* is provided
+    (the ``"recipes"`` section of ``export_db.json``) the function resolves
+    each recipe key to its ``resultType`` (the item being produced).  As a
+    fallback, the ``Blueprint`` suffix is stripped from the recipe key —
+    this correctly handles component recipes even when the export DB is
+    stale.
+
+    Returns:
+        A ``defaultdict[str, int]`` mapping normalised item path → quantity
+        (typically 1 per pending slot).
+    """
+    from warframe_profile.model.analysis import normalize_path
+    pending: defaultdict[str, int] = defaultdict(int)
+    for pr in inventory.get("PendingRecipes", []):
+        recipe_key = pr.get("ItemType", "")
+        if not recipe_key:
+            continue
+        if recipes:
+            recipe = recipes.get(recipe_key)
+            result_type = recipe.get("resultType", "") if recipe else ""
+            if result_type:
+                pending[normalize_path(result_type)] += 1
+                continue
+        # Fallback: strip "Blueprint" suffix — works for component recipes
+        # (e.g., /.../KeratinosBladeBlueprint → /.../KeratinosBlade).
+        if recipe_key.endswith("Blueprint"):
+            stripped = recipe_key[:-len("Blueprint")]
+            if stripped:
+                pending[normalize_path(stripped)] += 1
+    return pending
+
+
+def build_owned(
+    inventory: dict,
+    recipes: dict | None = None,
+) -> defaultdict[str, int]:
     """Build a flat count of every item owned across all inventory sections.
+
+    When *recipes* is provided (the ``"recipes"`` section of
+    ``export_db.json``) items currently being built in the foundry
+    (``PendingRecipes``) are also counted as owned.
 
     Keys are normalised paths (see :func:`~warframe_profile.analysis.normalize_path`).
 
@@ -336,6 +381,10 @@ def build_owned(inventory: dict) -> defaultdict[str, int]:
     for sect in EQUIPMENT_SECTIONS:
         for eq in inventory.get(sect, []):
             owned[normalize_path(eq.get("ItemType", ""))] += 1
+    # Include items currently being crafted in the foundry.
+    pending = parse_pending_recipes(inventory, recipes)
+    for k, v in pending.items():
+        owned[k] += v
     return owned
 
 

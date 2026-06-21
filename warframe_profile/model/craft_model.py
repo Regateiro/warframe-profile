@@ -341,6 +341,13 @@ def resolve_tree(
                         "owned": bp_owned,
                     }
 
+    if depth > 0:
+        item_owned_qty = owned.get(normalize_path(item_un), 0)
+        remaining_qty = max(0, quantity - item_owned_qty)
+        effective_crafts = max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
+    else:
+        effective_crafts = num_crafts
+
     agg_components: dict[str, dict] = {}
     for comp in components:
         key = comp.get("uniqueName", "").lower()
@@ -357,7 +364,7 @@ def resolve_tree(
         if is_bp and not consumable:
             total = comp_count
         else:
-            total = num_crafts * comp_count
+            total = effective_crafts * comp_count
 
         comp_owned = owned.get(normalize_path(comp_un), 0)
         expand = (
@@ -464,7 +471,7 @@ def compute_crafting_plan(craftables: dict, owned: dict) -> dict:
         bq = v.get("build_qty", 1) or 1
         oq = v.get("owned", 0)
         remaining = max(0, v["quantity"] - oq)
-        v["num_crafts"] = max(1, math.ceil(remaining / bq))
+        v["num_crafts"] = max(0, math.ceil(remaining / bq))
     return craftables
 
 

@@ -68,7 +68,7 @@ def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> No
 
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
     _cache.inventory = inv
-    _cache.owned = build_owned(inv)
+    _cache.owned = build_owned(inv, data.get("recipes", {}))
 
 
 def _ensure_analysis():

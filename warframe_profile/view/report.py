@@ -389,6 +389,11 @@ def print_craft_tree(
     consumable = recipe.get("consumeOnUse", True)
 
     num_crafts = max(1, math.ceil(quantity / build_qty))
+    if depth > 0:
+        remaining_qty = max(0, quantity - owned_qty)
+        effective_crafts = max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
+    else:
+        effective_crafts = num_crafts
 
     consumed: dict[str, int] = defaultdict(int)
 
@@ -404,7 +409,7 @@ def print_craft_tree(
 
         is_bp = "blueprint" in comp_name.lower() or _is_blueprint_un(comp_un)
         reusable = is_bp and not consumable
-        label_mult = 1 if reusable else num_crafts * comp_count
+        label_mult = 1 if reusable else effective_crafts * comp_count
 
         comp_display = _display_name(comp, items_by_un, item_name, loc_dict)
         label = f"{comp_display} x{label_mult}"

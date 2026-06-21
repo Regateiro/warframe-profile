@@ -53,7 +53,7 @@ def main(args) -> None:
         print(f"  Live fetch failed: {e}", file=sys.stderr)
         sys.exit(1)
 
-    owned = build_owned(inv)
+    owned = build_owned(inv, raw.get("recipes", {}))
 
     if args.weapon_chain:
         chains, all_req, all_craft, shown = build_weapon_chains(
