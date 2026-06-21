@@ -1,5 +1,14 @@
 """Warframe process memory scanning and API inventory fetching.
 
+This module is the **data source** for the entire application.  It provides:
+
+1. Memory scanning of the running Warframe Linux process to extract the
+   player's ``accountId`` and ``nonce`` (used for API authentication).
+2. HTTP fetching of the DE inventory API using those credentials.
+3. Cached loading / saving of inventory JSON to disk.
+4. Utility functions (:func:`build_owned`, :func:`build_mastered_set`, etc.)
+   that transform raw API responses into lookup-friendly data structures.
+
 Two data-fetching strategies are supported:
 
 * **Live scan** — reads the running Warframe process's memory via
@@ -22,20 +31,30 @@ from collections import defaultdict
 
 from warframe_profile.model.utils import normalize_path
 
-
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
 INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={}&ct=STM"
 
 #: Inventory sections that contain equipment (weapons, warframes, sentinels, etc.).
+#: These are the top-level keys in the DE inventory API response that hold
+#: owned equipment items.  Used by ``build_owned`` and analysis functions.
 EQUIPMENT_SECTIONS: list[str] = [
-    "Suits", "LongGuns", "Pistols", "Melee", "Sentinels",
-    "SentinelWeapons", "SpaceSuits", "SpaceGuns", "SpaceMelee",
+    "Suits",
+    "LongGuns",
+    "Pistols",
+    "Melee",
+    "Sentinels",
+    "SentinelWeapons",
+    "SpaceSuits",
+    "SpaceGuns",
+    "SpaceMelee",
 ]
 
 
 # ---------------------------------------------------------------------------
-# Custom exceptions
+# Custom exceptions — each maps to a distinct failure mode so callers can
+# catch exactly what they need.
 # ---------------------------------------------------------------------------
+
 
 class WarframeNotRunningError(RuntimeError):
     """Raised when no Warframe process can be found in ``/proc``."""
@@ -54,8 +73,10 @@ class ProfileNotFoundError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Generic HTTP helper
+# Generic HTTP helper — used by inventory fetching, profile fetching, and
+# the ``--update`` script to download data from DE and WFCD servers.
 # ---------------------------------------------------------------------------
+
 
 def fetch_json(url: str) -> dict | list:
     """Download *url* and deserialise the JSON response.
@@ -76,14 +97,21 @@ def fetch_json(url: str) -> dict | list:
 # Export database — single-load data layer
 # ---------------------------------------------------------------------------
 
+
 class ExportDB:
     """Single-load cache for the merged export database (``export_db.json``).
 
     Opens and decodes the file exactly once on :meth:`load`, then exposes
-    sub-sections as properties without re-reading.
+    sub-sections as properties without re-reading.  This is the primary
+    data source for all game item information — warframes, weapons, relics,
+    resources, recipes, and the language dictionary.
+
+    Sub-sections (``items``, ``recipes``, ``locale``, ``raw``) are accessed
+    via properties so that callers never touch the raw JSON directly.
     """
 
     def __init__(self, path: str) -> None:
+        """Store the file path; data is loaded lazily on first call."""
         self._path = path
         self._data: dict | None = None
 
@@ -104,7 +132,11 @@ class ExportDB:
 
     @property
     def items(self) -> list[dict]:
-        """The merged item list (``data["items"]``)."""
+        """The merged item list (``data["items"]``).
+
+        Every masterable, tradable, and cosmetic item in the game, enriched
+        with WFCD fields (``isPrime``, ``category``, etc.).
+        """
         if self._data is None:
             return []
         if isinstance(self._data, dict):
@@ -114,32 +146,53 @@ class ExportDB:
 
     @property
     def recipes(self) -> dict:
-        """The recipe index (``data.get("recipes", {})``)."""
+        """The recipe index (``data.get("recipes", {})``).
+
+        Maps recipe uniqueNames (like
+        ``/Lotus/Recipes/Weapons/LatoPrimeBlueprint``) to their ingredient
+        lists and metadata.
+        """
         if isinstance(self._data, dict):
             return self._data.get("recipes", {})
         return {}
 
     @property
     def locale(self) -> dict:
-        """The language dictionary (``data.get("dict", {})``)."""
+        """The language dictionary (``data.get("dict", {})``).
+
+        Maps ``/Lotus/Language/...`` keys to human-readable display names.
+        """
         if isinstance(self._data, dict):
             return self._data.get("dict", {})
         return {}
 
     @property
     def raw(self) -> dict:
-        """The full decoded dict."""
+        """The full decoded dict — returned as-is for callers that need
+        the complete data blob (e.g. ``craft_model.build_items_by_un``)."""
         return self._data or {}
 
 
 # ---------------------------------------------------------------------------
 # Warframe process memory scanning
 # ---------------------------------------------------------------------------
+# Live inventory fetching requires authentication credentials (accountId and
+# nonce) that the game stores in its process memory.  We scan /proc/<pid>/mem
+# to find them — this is the same technique used by the Warframe community
+# tools like "Inventory Inspector" and "AlecaFrame".
+#
+# Flow:
+#   1. find_warframe_pid() — locate the process by scanning /proc.
+#   2. find_in_memory() — binary search of the address space for an ASCII key.
+#   3. _find_credentials_in_memory() — extract accountId + nonce from matches.
+#   4. fetch_inventory() — use credentials to call the DE API.
+
 
 def find_warframe_pid() -> int:
     """Return the PID of the running Warframe process.
 
     Scans ``/proc/<pid>/cmdline`` for ``Warframe.x64.exe``.
+    Non-digit /proc entries are skipped (kernel threads, etc.).
 
     Raises:
         WarframeNotRunningError: if no matching process is found.
@@ -152,7 +205,7 @@ def find_warframe_pid() -> int:
                 cmd = f.read()
             if "Warframe.x64.exe" in cmd:
                 return int(pid_str)
-        except (OSError, IOError):
+        except OSError:
             pass
     raise WarframeNotRunningError(
         "Warframe process not found. Launch the game and reach the Orbiter."
@@ -160,10 +213,18 @@ def find_warframe_pid() -> int:
 
 
 def find_in_memory(
-    pid: int, pattern: str, context: int = 256,
+    pid: int,
+    pattern: str,
+    context: int = 256,
     max_per_region: int = 64 * 1024 * 1024,
 ) -> tuple[int | None, bytes | None]:
     """Search a process's address space for an ASCII *pattern*.
+
+    Works by reading ``/proc/<pid>/maps`` to enumerate memory regions,
+    then scanning each readable region in ``/proc/<pid>/mem``.
+    Large anonymous (heap) regions are clamped to *max_per_region*;
+    file-backed regions are clamped to 8 MiB — this avoids pathological
+    scan times while still finding the credential strings.
 
     Args:
         pid: Target process ID.
@@ -201,7 +262,7 @@ def find_in_memory(
                     lo = max(0, idx - context)
                     hi = min(len(data), idx + context)
                     return start + idx, data[lo:hi]
-        except (OSError, IOError, PermissionError):
+        except (OSError, PermissionError):
             pass
     return None, None
 
@@ -209,9 +270,25 @@ def find_in_memory(
 # ---------------------------------------------------------------------------
 # Inventory fetching (live vs cached)
 # ---------------------------------------------------------------------------
+# The typical flow is:
+#   1. Call load_inventory_with_fallback().
+#   2. If no cached file or --refresh was passed, it calls fetch_inventory().
+#   3. fetch_inventory() calls find_warframe_pid() → _find_credentials_in_memory()
+#      → DE API → returns (inventory_dict, account_id).
+#   4. The profile data is also fetched and merged.
+#   5. The combined data is saved to disk for future use.
+
 
 def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
-    """Scan Warframe process memory for accountId and nonce."""
+    """Scan Warframe process memory for accountId and nonce.
+
+    Warframe stores a URL containing the account's API credentials in
+    its heap memory.  We search for ``&nonce=`` and ``accountId=`` strings,
+    then extract the actual values via regex.
+
+    Raises:
+        InventoryFetchError: if credentials cannot be found.
+    """
     for pattern in ("&nonce=", "accountId="):
         addr, chunk = find_in_memory(pid, pattern)
         if addr is None:
@@ -221,13 +298,15 @@ def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
         if m:
             return m.group(1), m.group(2)
     raise InventoryFetchError(
-        "Could not find accountId/nonce in Warframe memory. "
-        "Make sure you're in the Orbiter."
+        "Could not find accountId/nonce in Warframe memory. Make sure you're in the Orbiter."
     )
 
 
 def fetch_inventory() -> tuple[dict, str]:
     """Scan Warframe memory for credentials and fetch the live inventory.
+
+    This is the main live-fetch pipeline:
+    PID → credentials → DE API → parsed JSON.
 
     Returns:
         ``(inventory_dict, account_id)``.
@@ -246,7 +325,11 @@ def fetch_inventory() -> tuple[dict, str]:
 
 
 def load_inventory(path: str) -> dict:
-    """Load a previously-cached inventory JSON file."""
+    """Load a previously-cached inventory JSON file from disk.
+
+    Used when a cached ``inventory.json`` exists and ``--refresh`` was
+    not specified.
+    """
     with open(path) as f:
         return json.load(f)
 
@@ -254,13 +337,15 @@ def load_inventory(path: str) -> dict:
 def fetch_de_profile(account_id: str) -> dict:
     """Fetch player profile data from Digital Extremes' profile viewer API.
 
+    The profile API returns mastery rank, XP history (which items have been
+    ranked up), and the player's display name.  This data is needed by the
+    ``--mastery`` sub-command and to determine which items are "mastered"
+    even after being sold.
+
     Returns:
         The first result dict from the API response.
     """
-    url = (
-        "http://content.warframe.com/dynamic/"
-        f"getProfileViewingData.php?playerId={account_id}"
-    )
+    url = f"http://content.warframe.com/dynamic/getProfileViewingData.php?playerId={account_id}"
     resp = fetch_json(url)
     if not isinstance(resp, dict):
         raise ProfileNotFoundError("Unexpected response format")
@@ -273,6 +358,9 @@ def fetch_de_profile(account_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Summary / aggregation helpers
 # ---------------------------------------------------------------------------
+# These functions transform the raw DE API inventory JSON into dicts and
+# sets that the analysis layer can work with efficiently.
+
 
 def build_mastered_set(inv: dict) -> set[str]:
     """Return normalised paths of every item the player has ever ranked up.
@@ -281,6 +369,9 @@ def build_mastered_set(inv: dict) -> set[str]:
     1. ``XPInfo`` from the DE profile viewing API — items that contributed
        XP even if already sold (only present after a ``--refresh``).
     2. Any item with an ``XP`` field > 0 anywhere in the inventory.
+
+    This set is used by the analysis layer to determine which items should
+    be considered "owned" even if the physical copy was sold.
 
     Returns:
         A set of lower-cased item paths.
@@ -307,13 +398,17 @@ def build_mastered_set(inv: dict) -> set[str]:
         elif isinstance(obj, list):
             for v in obj:
                 _walk(v)
+
     _walk(inv)
 
     return leveled
 
 
 def inventory_summary(inv: dict) -> tuple[int, int, int]:
-    """Return ``(misc_count, recipe_count, equipment_count)``."""
+    """Return ``(misc_count, recipe_count, equipment_count)``.
+
+    Used only for the one-line summary printed after a ``--refresh``.
+    """
     misc = len(inv.get("MiscItems", []))
     rec = len(inv.get("Recipes", []))
     equip = sum(len(inv.get(s, [])) for s in EQUIPMENT_SECTIONS)
@@ -351,7 +446,7 @@ def parse_pending_recipes(
         # Fallback: strip "Blueprint" suffix — works for component recipes
         # (e.g., /.../KeratinosBladeBlueprint → /.../KeratinosBlade).
         if recipe_key.endswith("Blueprint"):
-            stripped = recipe_key[:-len("Blueprint")]
+            stripped = recipe_key[: -len("Blueprint")]
             if stripped:
                 pending[normalize_path(stripped)] += 1
     return pending
@@ -363,9 +458,13 @@ def build_owned(
 ) -> defaultdict[str, int]:
     """Build a flat count of every item owned across all inventory sections.
 
-    When *recipes* is provided (the ``"recipes"`` section of
-    ``export_db.json``) items currently being built in the foundry
-    (``PendingRecipes``) are also counted as owned.
+    Aggregates all items from:
+    - MiscItems (resources, relics, mods, etc.)
+    - Recipes (blueprints)
+    - Equipment sections (Suits, LongGuns, Pistols, etc.)
+    - PendingRecipes (items currently in the foundry, if *recipes* provided)
+
+    The resulting dict is the primary input to every analysis function.
 
     Keys are normalised paths (see :func:`~warframe_profile.analysis.normalize_path`).
 
@@ -405,7 +504,8 @@ def merge_profile_data(inv: dict, profile: dict) -> None:
 
 
 def load_inventory_with_fallback(
-    inv_path: str, refresh: bool = False,
+    inv_path: str,
+    refresh: bool = False,
 ) -> tuple[dict, str | None]:
     """Return inventory — either freshly fetched or from the local cache.
 
@@ -414,6 +514,8 @@ def load_inventory_with_fallback(
     the DE profile viewing data (for mastery tracking), merges them,
     saves, and prints a summary to stderr.  Otherwise the cached file
     is loaded.
+
+    This is the main inventory loading entry point used by all presenters.
 
     Returns:
         ``(inventory_dict, account_id_or_None)``.
@@ -424,13 +526,14 @@ def load_inventory_with_fallback(
             profile = fetch_de_profile(account_id)
             merge_profile_data(inv, profile)
         except (ProfileNotFoundError, InventoryFetchError) as e:
-            print(f"  Warning: could not fetch profile data: {e}",
-                  file=sys.stderr)
+            print(f"  Warning: could not fetch profile data: {e}", file=sys.stderr)
         with open(inv_path, "w") as f:
             json.dump(inv, f, indent=2)
         misc, rec, equip = inventory_summary(inv)
-        print(f"  Inventory: {misc} items, {rec} recipes, {equip} equipment  "
-              f"(account: {account_id})", file=sys.stderr)
+        print(
+            f"  Inventory: {misc} items, {rec} recipes, {equip} equipment  (account: {account_id})",
+            file=sys.stderr,
+        )
         return inv, account_id
     return load_inventory(inv_path), None
 
@@ -445,6 +548,11 @@ def load_data(
 
     Convenience wrapper shared by the ``--ducats`` / ``--relics`` /
     ``--cleanup`` entry points.  Exits the process on error.
+
+    This is the standard "init" pattern for most sub-commands:
+    1. Create ExportDB and load items.
+    2. Load inventory (live or cached).
+    3. Return both.
 
     Returns:
         ``(ExportDB, inventory_dict)``.
@@ -462,8 +570,7 @@ def load_data(
     try:
         inv, _account_id = load_inventory_with_fallback(
             inv_path,
-            refresh=refresh or (not inventory_path
-                                and not os.path.exists(inv_path)),
+            refresh=refresh or (not inventory_path and not os.path.exists(inv_path)),
         )
     except (WarframeNotRunningError, InventoryFetchError) as e:
         print(f"  Error: {e}", file=sys.stderr)

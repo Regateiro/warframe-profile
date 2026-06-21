@@ -1,14 +1,31 @@
-"""HTML templates for the web view — renders model data as HTML pages."""
+"""HTML templates for the web view — renders model data as HTML pages.
+
+Each ``render_*`` function takes the same model dataclasses as the CLI
+view (:mod:`warframe_profile.view.report`) but returns an HTML string
+wrapped in the shared dark-theme page layout (:func:`_page`).
+
+The page layout includes:
+    - GitHub-dark inspired CSS theme.
+    - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Cleanup).
+    - Refresh Inventory button (POSTs to /refresh).
+    - Subtab bars for views with multiple sub-sections (ducats, relics, cleanup).
+
+This module is the **web view** in the MVP pattern.
+"""
 
 import math
 from collections import defaultdict
 
 from warframe_profile.model.craft_model import (
-    resolve_name, has_recipe, display_name, is_blueprint_un,
-    un_to_name, should_expand, get_recipe_components,
+    display_name,
+    get_recipe_components,
+    has_recipe,
+    is_blueprint_un,
+    resolve_name,
+    should_expand,
+    un_to_name,
 )
 from warframe_profile.model.utils import normalize_path
-
 
 GREEN = "#27ae60"
 RED = "#e74c3c"
@@ -16,30 +33,12 @@ YELLOW = "#f1c40f"
 DIM = "#7f8c8d"
 
 
-def _page(title: str, content: str, active: str) -> str:
-    tabs = [
-        ("home", "Home", "/"),
-        ("ducats", "Ducats", "/ducats"),
-        ("relics", "Relics", "/relics"),
-        ("craft", "Craft", "/craft"),
-        ("weapon-chains", "Weapon Chains", "/weapon-chains"),
-        ("cleanup", "Cleanup", "/cleanup"),
-    ]
-    tab_links = "".join(
-        f'<a href="{url}"{" class=\"active\"" if key == active else ""}>'
-        f"{label}</a>"
-        for key, label, url in tabs
-    )
-    refresh_form = '<form method="post" action="/refresh" style="margin-left:auto">' \
-                   '<button type="submit" style="padding:4px 12px;font-size:0.85rem">' \
-                   'Refresh Inventory</button></form>'
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title} — Warframe Profile</title>
-<style>
+def _page_styles() -> str:
+    green = "#27ae60"
+    red = "#e74c3c"
+    yellow = "#f1c40f"
+    dim = "#7f8c8d"
+    return f"""<style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           background: #0d1117; color: #c9d1d9; padding: 20px; }}
@@ -60,8 +59,8 @@ def _page(title: str, content: str, active: str) -> str:
   tbody tr:nth-child(even) {{ background: #111920; }}
   tbody tr:hover {{ background: #161b22; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .green {{ color: {GREEN}; }} .red {{ color: {RED}; }} .yellow {{ color: {YELLOW}; }}
-  .dim {{ color: {DIM}; }}
+  .green {{ color: {green}; }} .red {{ color: {red}; }} .yellow {{ color: {yellow}; }}
+  .dim {{ color: {dim}; }}
   summary {{ cursor: pointer; padding: 4px 0; font-weight: 600; color: #58a6ff; }}
   details {{ margin: 4px 0; }}
   details[open] > summary {{ margin-bottom: 6px; }}
@@ -69,9 +68,9 @@ def _page(title: str, content: str, active: str) -> str:
   .tree-item {{ padding: 2px 0; }}
   .tag {{ display: inline-block; padding: 1px 6px; border-radius: 3px;
           font-size: 0.75rem; font-weight: 600; }}
-  .tag-green {{ background: {GREEN}22; color: {GREEN}; }}
-  .tag-red {{ background: {RED}22; color: {RED}; }}
-  .tag-yellow {{ background: {YELLOW}22; color: {YELLOW}; }}
+  .tag-green {{ background: {green}22; color: {green}; }}
+  .tag-red {{ background: {red}22; color: {red}; }}
+  .tag-yellow {{ background: {yellow}22; color: {yellow}; }}
   .tab-bar {{ display: flex; gap: 6px; margin-bottom: 16px; }}
   .tab-bar a {{ padding: 4px 12px; border-radius: 4px; text-decoration: none;
                background: #161b22; color: #8b949e; font-size: 0.85rem; }}
@@ -82,14 +81,46 @@ def _page(title: str, content: str, active: str) -> str:
   button:hover {{ background: #1f6feb; }}
   .flash {{ padding: 10px 14px; border-radius: 6px; margin: 12px 0;
            background: #1f6feb22; border: 1px solid #1f6feb; color: #58a6ff; }}
-  .flash-error {{ background: {RED}22; border-color: {RED}; color: {RED}; }}
+  .flash-error {{ background: {red}22; border-color: {red}; color: {red}; }}
   @media (max-width: 600px) {{ table {{ font-size: 0.75rem; }}
     th, td {{ padding: 4px 6px; }} }}
-</style>
+</style>"""
+
+
+def _nav_link(key: str, label: str, url: str, active: str) -> str:
+    active_cls = ' class="active"' if key == active else ""
+    return f'<a href="{url}"{active_cls}>{label}</a>'
+
+
+def _refresh_form() -> str:
+    return (
+        '<form method="post" action="/refresh" style="margin-left:auto">'
+        '<button type="submit" style="padding:4px 12px;font-size:0.85rem">'
+        "Refresh Inventory</button></form>"
+    )
+
+
+def _page(title: str, content: str, active: str) -> str:
+    tabs = [
+        ("home", "Home", "/"),
+        ("ducats", "Ducats", "/ducats"),
+        ("relics", "Relics", "/relics"),
+        ("craft", "Craft", "/craft"),
+        ("weapon-chains", "Weapon Chains", "/weapon-chains"),
+        ("cleanup", "Cleanup", "/cleanup"),
+    ]
+    tab_links = "".join(_nav_link(key, label, url, active) for key, label, url in tabs)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — Warframe Profile</title>
+{_page_styles()}
 </head>
 <body>
 <h1>Warframe Profile</h1>
-<nav>{tab_links}{refresh_form}</nav>
+<nav>{tab_links}{_refresh_form()}</nav>
 {content}
 </body>
 </html>"""
@@ -99,12 +130,15 @@ def _page(title: str, content: str, active: str) -> str:
 # Subtab navigation helpers
 # ---------------------------------------------------------------------------
 
+
 def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
-    links = "".join(
-        f'<a href="{url}"{" class=\"active\"" if key == active else ""}>{label}</a>'
-        for key, label, url in subtabs
-    )
+    def _link(key, label, url):
+        active_cls = ' class="active"' if key == active else ""
+        return f'<a href="{url}"{active_cls}>{label}</a>'
+
+    links = "".join(_link(key, label, url) for key, label, url in subtabs)
     return f'<div class="tab-bar">{links}</div>'
+
 
 _DUCATS_SUBTABS = [
     ("missing", "Missing", "/ducats"),
@@ -128,8 +162,11 @@ _CLEANUP_SUBTABS = [
 # Home
 # ---------------------------------------------------------------------------
 
+
 def render_home() -> str:
-    return _page("Home", """
+    return _page(
+        "Home",
+        """
 <div class="flash">Select a tab above to explore your Warframe profile.</div>
 <ul style="margin-left:20px;line-height:1.8">
   <li><strong>Ducats</strong> — Prime part analysis, missing items, sell recommendations</li>
@@ -137,16 +174,24 @@ def render_home() -> str:
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
-</ul>""", "home")
+</ul>""",
+        "home",
+    )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Shared rendering helpers used by multiple render_* functions.
+# _status_tag — HTML span with colour-coded owned/partial/farm status.
+# _tree_html  — recursive crafting tree HTML builder (mirrors print_craft_tree).
+# _craft_summary_html — aggregated requirements and farming tables.
+#
+
 
 def _status_tag(owned: int, needed: int) -> str:
     if owned >= needed:
-        return f'<span class="tag tag-green">owned</span>'
+        return '<span class="tag tag-green">owned</span>'
     elif owned > 0:
         return f'<span class="tag tag-yellow">partial {owned}/{needed}</span>'
     return f'<span class="tag tag-red">farm {needed - owned}</span>'
@@ -168,40 +213,92 @@ def _craft_color(owned: int, needed: int) -> str:
     return "red"
 
 
+def _tree_component_html(
+    comp: dict,
+    effective_crafts: int,
+    consumable: bool,
+    items_by_un: dict,
+    owned: dict,
+    consumed: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+    depth: int,
+    max_depth: int,
+    item_name: str,
+) -> str:
+    """Build the HTML fragment for one component in the tree."""
+    comp_un = comp.get("uniqueName", "")
+    comp_un_lower = comp_un.lower()
+    comp_count = comp.get("itemCount", 1)
+    comp_name = resolve_name(comp.get("name", ""), loc_dict)
+    is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
+    reusable = is_bp and not consumable
+    label_mult = 1 if reusable else effective_crafts * comp_count
+
+    comp_display = display_name(comp, items_by_un, item_name, loc_dict)
+    label = f"{comp_display} x{label_mult}"
+    if reusable:
+        label += " (reusable)"
+
+    comp_owned_qty = owned.get(normalize_path(comp_un), 0) - consumed[comp_un_lower]
+    consumed[comp_un_lower] += label_mult
+
+    cls = _craft_color(comp_owned_qty, label_mult)
+    parts = [f'<div class="tree-item"><span class="{cls}">{label}</span></div>']
+
+    expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
+        comp_owned_qty >= label_mult
+    )  # noqa: E501
+    if expand:
+        sub = _tree_html(
+            comp_un,
+            label_mult,
+            items_by_un,
+            owned,
+            recipes_by_result,
+            loc_dict,
+            depth + 1,
+            max_depth,
+            item_name,
+        )  # noqa: E501
+        if sub:
+            parts.append(f'<div class="tree">{sub}</div>')
+
+    return "".join(parts)
+
+
 def _tree_html(
-    item_un: str, quantity: int, items_by_un: dict, owned: dict,
-    recipes_by_result: dict, loc_dict: dict,
-    depth: int = 0, max_depth: int = 2, parent_name: str | None = None,
+    item_un: str,
+    quantity: int,
+    items_by_un: dict,
+    owned: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+    depth: int = 0,
+    max_depth: int = 2,
+    parent_name: str | None = None,
 ) -> str:
     lines: list[str] = []
     item_un_lower = item_un.lower()
     item = items_by_un.get(item_un_lower)
 
-    recipe_components = (
+    components = (
         get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
-    )
-    components = recipe_components
+    )  # noqa: E501
 
-    item_name = (
-        resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
-    )
+    item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
     if not item_name:
         item_name = un_to_name(item_un)
-
-    owned_qty = owned.get(normalize_path(item_un), 0)
-    sat = owned_qty >= quantity
 
     recipe = recipes_by_result.get(item_un_lower)
     if recipe:
         bp_key = recipe.get("_recipeKey", "")
         if bp_key:
-            components = [{
-                "uniqueName": bp_key,
-                "name": f"{item_name} Blueprint",
-                "itemCount": 1,
-            }] + components
+            components = [
+                {"uniqueName": bp_key, "name": f"{item_name} Blueprint", "itemCount": 1}
+            ] + components  # noqa: E501
 
     if not components or not recipe:
         return ""
@@ -209,46 +306,24 @@ def _tree_html(
     build_qty = recipe.get("num", 1) or 1
     consumable = recipe.get("consumeOnUse", True)
     num_crafts = max(1, math.ceil(quantity / build_qty))
-    consumed: dict[str, int] = defaultdict(int)
 
-    for i, comp in enumerate(components):
-        comp_un = comp.get("uniqueName", "")
-        comp_un_lower = comp_un.lower()
-        comp_count = comp.get("itemCount", 1)
-        comp_name = resolve_name(comp.get("name", ""), loc_dict)
-        is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
-        reusable = is_bp and not consumable
-        label_mult = 1 if reusable else num_crafts * comp_count
-
-        comp_display = display_name(comp, items_by_un, item_name, loc_dict)
-        label = f"{comp_display} x{label_mult}"
-        if reusable:
-            label += " (reusable)"
-
-        comp_owned_qty = (
-            owned.get(normalize_path(comp_un), 0) - consumed[comp_un_lower]
-        )
-        consumed[comp_un_lower] += label_mult
-
-        cls = _craft_color(comp_owned_qty, label_mult)
+    consumed = defaultdict(int)
+    for comp in components:
         lines.append(
-            f'<div class="tree-item"><span class="{cls}">{label}</span></div>'
-        )
-
-        expand = (
-            should_expand(
-                comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
+            _tree_component_html(
+                comp,
+                num_crafts,
+                consumable,
+                items_by_un,
+                owned,
+                consumed,
+                recipes_by_result,
+                loc_dict,
+                depth,
+                max_depth,
+                item_name,
             )
-            and not (comp_owned_qty >= label_mult)
-        )
-        if expand:
-            sub = _tree_html(
-                comp_un, label_mult, items_by_un, owned,
-                recipes_by_result, loc_dict,
-                depth + 1, max_depth, item_name,
-            )
-            if sub:
-                lines.append(f'<div class="tree">{sub}</div>')
+        )  # noqa: E501
 
     return "".join(lines)
 
@@ -283,9 +358,12 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 <tbody>{mat_rows}</tbody></table>""")
 
     farm_items = [
-        {"name": info["name"], "needed": info["quantity"],
-         "owned": info["owned"],
-         "missing": max(0, info["quantity"] - info["owned"])}
+        {
+            "name": info["name"],
+            "needed": info["quantity"],
+            "owned": info["owned"],
+            "missing": max(0, info["quantity"] - info["owned"]),
+        }
         for info in sorted(requirements.values(), key=lambda x: x["name"])
         if max(0, info["quantity"] - info["owned"]) > 0
     ]
@@ -308,6 +386,12 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 # ---------------------------------------------------------------------------
 # Ducats
 # ---------------------------------------------------------------------------
+# Three sub-views:
+#   Missing — masterable Prime items with zero parts owned.
+#   Excess  — per-item breakdown of missing and spare parts.
+#   Sell    — aggregated surplus parts with ducat values.
+#
+
 
 def render_ducats_missing(data) -> str:
     items = data.items
@@ -337,7 +421,7 @@ def render_ducats_missing(data) -> str:
     if n_partial:
         bits.append(f"{n_partial} partial")
     parts.append(f"""<h2>Summary</h2>
-<p>{', '.join(bits)} &mdash; {total_safe:,} ducats safe &mdash; {total_keep:,} ducats keep</p>""")
+<p>{", ".join(bits)} &mdash; {total_safe:,} ducats safe &mdash; {total_keep:,} ducats keep</p>""")
 
     content = _subtab_bar(_DUCATS_SUBTABS, "missing") + "".join(parts)
     return _page("Ducats — Missing", content, "ducats")
@@ -347,14 +431,13 @@ def render_ducats_excess(data) -> str:
     items = data.items
     parts = []
 
-    relevant = [i for i in items if (
-        any(p.surplus > 0 for p in i.parts)
-        or any(p.missing > 0 for p in i.parts)
-    )]
+    relevant = [
+        i
+        for i in items
+        if (any(p.surplus > 0 for p in i.parts) or any(p.missing > 0 for p in i.parts))
+    ]
     if relevant:
-        rows = "".join(
-            _item_row(i) for i in sorted(relevant, key=lambda x: x.name)
-        )
+        rows = "".join(_item_row(i) for i in sorted(relevant, key=lambda x: x.name))
         parts.append(f"""<h2>Excess Prime Parts</h2>
 <table><thead><tr><th>Item</th><th class='num'>Copies</th>
 <th>Missing</th><th>Excess</th><th class='num'>Ducats</th></tr></thead>
@@ -396,13 +479,9 @@ def render_ducats_sell(data) -> str:
 
 def _item_row(i) -> str:
     missing_parts = [p for p in i.parts if p.missing > 0]
-    missing_str = (
-        ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "—"
-    )
+    missing_str = ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "—"
     surplus_parts = [p for p in i.parts if p.surplus > 0]
-    surplus_str = (
-        ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "—"
-    )
+    surplus_str = ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "—"
     excess_duc = sum(p.surplus * p.ducats for p in surplus_parts)
     return (
         f"<tr><td>{i.name}</td>"
@@ -416,6 +495,11 @@ def _item_row(i) -> str:
 # ---------------------------------------------------------------------------
 # Relics
 # ---------------------------------------------------------------------------
+# Two sub-views:
+#   Needed Drops — prime parts still missing + which owned relics drop them.
+#   Safe-to-Spam — relics whose every prime-part reward is already owned.
+#
+
 
 def render_relics_needed(needed, relics) -> str:
     parts = []
@@ -425,7 +509,7 @@ def render_relics_needed(needed, relics) -> str:
             f"<tr><td>{n.part_name}</td><td>{n.item_name}</td>"
             f'<td class="num">x{n.missing}</td>'
             f'<td class="num">{n.ducats or ""}</td>'
-            f"<td>{', '.join(f'{name} x{count}' for name, count, _ in n.drops) if n.drops else '—'}</td></tr>"
+            f"<td>{', '.join(f'{name} x{count}' for name, count, _ in n.drops) if n.drops else '—'}</td></tr>"  # noqa: E501
             for n in needed
         )
         parts.append(f"""<h2>Needed Prime Parts &amp; Relic Drops</h2>
@@ -454,7 +538,7 @@ def render_relics_safe(needed, relics) -> str:
 <table><thead><tr><th>Relic</th><th>Tier</th><th class='num'>Count</th>
 <th>Vaulted</th></tr></thead>
 <tbody>{rows}</tbody></table>
-<p>{len(safe)} relic{'s' if len(safe) != 1 else ''} safe to spam.</p>""")
+<p>{len(safe)} relic{"s" if len(safe) != 1 else ""} safe to spam.</p>""")
 
     content = _subtab_bar(_RELICS_SUBTABS, "safe") + "".join(parts)
     return _page("Relics — Safe", content, "relics")
@@ -463,10 +547,11 @@ def render_relics_safe(needed, relics) -> str:
 # ---------------------------------------------------------------------------
 # Craft
 # ---------------------------------------------------------------------------
+# Item lookup with search form + expandable crafting trees per result.
+#
+
 
 def render_craft(items_by_un, recipes_by_result, owned, loc_dict) -> str:
-    from warframe_profile.model.craft_model import find_items, build_lookup
-    by_name = build_lookup(items_by_un, loc_dict)
     content = """
 <div class="tab-bar">
   <a href="/craft" class="active">Item Lookup</a>
@@ -481,8 +566,13 @@ def render_craft(items_by_un, recipes_by_result, owned, loc_dict) -> str:
 
 
 def render_craft_result(
-    query: str, matches: list, items_by_un, recipes_by_result,
-    owned, loc_dict, depth: int = 3,
+    query: str,
+    matches: list,
+    items_by_un,
+    recipes_by_result,
+    owned,
+    loc_dict,
+    depth: int = 3,
 ) -> str:
     lines = []
     for m in matches:
@@ -491,11 +581,18 @@ def render_craft_result(
         cat = m.get("category", "")
         lines.append(f"""<details>
 <summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
-<div class="tree">{_tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)}</div>""")
+<div class="tree">{_tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)}</div>""")  # noqa: E501
         req, craft = None, None
         from warframe_profile.model.craft_model import resolve_tree
+
         req, craft = resolve_tree(
-            un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth,
+            un,
+            1,
+            items_by_un,
+            owned,
+            recipes_by_result,
+            loc_dict,
+            max_depth=depth,
         )
         lines.append(_craft_summary_html(req, craft))
         lines.append("</details>")
@@ -505,30 +602,47 @@ def render_craft_result(
   <a href="/craft" class="active">Item Lookup</a>
   <a href="/weapon-chains">Weapon Chains</a>
 </div>"""
-    content = tab_bar + f"""
+    content = (
+        tab_bar
+        + f"""
 <form method="get" action="/craft" style="margin-bottom:16px">
   <input type="text" name="q" placeholder="Search items..."
          value="{query}" style="width:300px">
   <button type="submit">Search</button>
 </form>
-<div>{''.join(lines)}</div>"""
+<div>{"".join(lines)}</div>"""
+    )
     return _page(f"Craft: {query}", content, "craft")
 
 
 # ---------------------------------------------------------------------------
 # Weapon Chains
 # ---------------------------------------------------------------------------
+# Lists weapon upgrade chains whose final weapon is not yet owned, with
+# expandable crafting trees and aggregated requirements.
+#
+
 
 def render_weapon_chains(
-    chains: list, all_requirements: dict, all_craftables: dict,
-    shown: int, items_by_un, recipes_by_result, owned, loc_dict,
+    chains: list,
+    all_requirements: dict,
+    all_craftables: dict,
+    shown: int,
+    items_by_un,
+    recipes_by_result,
+    owned,
+    loc_dict,
 ) -> str:
     parts = []
     if shown == 0:
-        return _page("Weapon Chains", """
-<div class="flash">No unowned weapon chains found!</div>""", "weapon-chains")
+        return _page(
+            "Weapon Chains",
+            """
+<div class="flash">No unowned weapon chains found!</div>""",
+            "weapon-chains",
+        )
 
-    parts.append(f'<p>{shown} chain{"s" if shown != 1 else ""} with unowned final weapons.</p>')
+    parts.append(f"<p>{shown} chain{'s' if shown != 1 else ''} with unowned final weapons.</p>")
 
     for chain in chains:
         final_un = chain[-1]
@@ -544,12 +658,19 @@ def render_weapon_chains(
             names.append(un_to_name(final_un))
 
         parts.append(f"""<details>
-<summary>{' → '.join(names)}</summary>
-<div class="tree">{_tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)}</div>""")
+<summary>{" → ".join(names)}</summary>
+<div class="tree">{_tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)}</div>""")  # noqa: E501
         req, craft = None, None
         from warframe_profile.model.craft_model import resolve_tree
+
         req, craft = resolve_tree(
-            final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5,
+            final_un,
+            1,
+            items_by_un,
+            owned,
+            recipes_by_result,
+            loc_dict,
+            max_depth=5,
         )
         parts.append(_craft_summary_html(req, craft))
         parts.append("</details>")
@@ -567,6 +688,12 @@ def render_weapon_chains(
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
+# Three sub-views:
+#   Re-Buyable — market-rebuyable equipment safe to sell.
+#   Prime Variant — non-Prime items whose Prime variant is already owned.
+#   Excess — blueprints/components whose every crafting path is covered.
+#
+
 
 def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> str:
     parts = []
@@ -581,7 +708,7 @@ def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> 
 <p class="dim" style="margin:-4px 0 8px;font-size:0.8rem">Includes items that only craft into equipment you already own.</p>
 <table><thead><tr><th>Name</th><th>Category</th><th>Buy Type</th>
 <th>Rarest Material</th></tr></thead>
-<tbody>{rows}</tbody></table>""")
+<tbody>{rows}</tbody></table>""")  # noqa: E501
 
     if not parts:
         parts.append('<p class="green">Nothing to clean up!</p>')

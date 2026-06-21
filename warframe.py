@@ -13,6 +13,8 @@ All four sub-commands are accessed through this script:
 """
 
 import sys
+
 from warframe_profile.__main__ import main
 
+# Entry point: parse CLI args, dispatch to sub-command, return exit code.
 sys.exit(main())

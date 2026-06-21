@@ -11,26 +11,47 @@ Identifies items and parts you can safely sell:
 
 import sys
 
-from warframe_profile.model.inventory import (
-    EQUIPMENT_SECTIONS, load_data, build_owned, build_mastered_set,
-)
 from warframe_profile.model.analysis import (
-    build_prime_map, build_item_index, compute_sellable_equipment,
-    build_regular_to_prime_map, find_owned_item_uns, find_owned_prime_uns,
+    build_item_index,
+    build_prime_map,
+    build_regular_to_prime_map,
+    compute_sellable_equipment,
     find_excess_blueprints_and_components,
+    find_owned_item_uns,
+    find_owned_prime_uns,
+)
+from warframe_profile.model.inventory import (
+    EQUIPMENT_SECTIONS,
+    build_mastered_set,
+    build_owned,
+    load_data,
 )
 from warframe_profile.model.utils import normalize_path
 from warframe_profile.view.report import (
-    section_sellable_equipment, section_items_with_owned_prime,
     section_excess_blueprints_components,
+    section_items_with_owned_prime,
+    section_sellable_equipment,
 )
 
 
 def main(args) -> None:
-    """Entry point for the inventory-cleanup sub-command."""
+    """Entry point for the inventory-cleanup sub-command.
+
+    Flow:
+        1. Load data (ExportDB + inventory).
+        2. Build item index and Prime map.
+        3. Compute market-rebuyable equipment (safe to sell).
+        4. Build regular-to-Prime map and identify owned regular weapons
+           whose Prime variant is already owned (safe to sell).
+        5. Find excess blueprints and components (every crafting path
+           leads to an already-owned item).
+        6. Print all three sections.
+    """
     db, inv = load_data(
-        args.items_cache, args.refresh_items,
-        args.inventory, args.refresh,
+        args.items_cache,
+        args.refresh_items,
+        args.inventory,
+        args.refresh,
     )
 
     items = db.items
@@ -53,7 +74,10 @@ def main(args) -> None:
 
     section_sellable_equipment(sellable)
     section_items_with_owned_prime(
-        owned_regular, reg_to_prime, owned_primes, items_by_un,
+        owned_regular,
+        reg_to_prime,
+        owned_primes,
+        items_by_un,
     )
 
     owned_finished: set[str] = {
@@ -66,8 +90,12 @@ def main(args) -> None:
         owned_finished |= mastered
 
     excess = find_excess_blueprints_and_components(
-        inv, items_by_un, db.recipes, build_owned(inv),
-        owned_finished, {},
+        inv,
+        items_by_un,
+        db.recipes,
+        build_owned(inv),
+        owned_finished,
+        {},
         mastered=mastered,
     )
     section_excess_blueprints_components(excess)

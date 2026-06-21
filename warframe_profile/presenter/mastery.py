@@ -4,18 +4,24 @@ Cross-references the player's XP history (from DE profile data) against
 the masterable items in the game database to identify true gaps — items
 that have never been ranked up — and displays them grouped by farming
 difficulty tier.
-"""
 
-import os
-import sys
+Flow:
+    1. Load the export DB (masterable items) and inventory (XP history).
+    2. Build the set of "ever leveled" items from XPInfo + XP fields.
+    3. For each masterable item, classify as:
+       - Mastered: cumulative XP >= expected max for its type.
+       - In progress: some XP but below max.
+       - Never touched: no XP at all.
+    4. Group unmastered items by farming difficulty tier (1-7).
+    5. Print the report with MR estimates and acquisition sources.
+"""
 
 from prettytable import PrettyTable, TableStyle
 
-from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import (
-    ExportDB, load_data,
+    ExportDB,
+    load_data,
 )
-
 
 # ---------------------------------------------------------------------------
 # Tier definitions — ordered easiest → hardest
@@ -28,10 +34,7 @@ TIERS = [
         "desc": "Quick wins: buy blueprints from Market or Fortuna, easy materials",
         "filter": lambda i: (
             not i.get("isPrime")
-            and (
-                i.get("category") in ("Sentinels", "Pets")
-                or i.get("category") == "Misc"
-            )
+            and (i.get("category") in ("Sentinels", "Pets") or i.get("category") == "Misc")
         ),
     },
     {
@@ -39,8 +42,7 @@ TIERS = [
         "label": "Tier 2 — Archwing & Arch-Melee",
         "desc": "Clan research / Archwing missions / Cephalon Simaris",
         "filter": lambda i: (
-            not i.get("isPrime")
-            and i.get("category") in ("Archwing", "Arch-Melee")
+            not i.get("isPrime") and i.get("category") in ("Archwing", "Arch-Melee")
         ),
     },
     {
@@ -64,18 +66,14 @@ TIERS = [
         "label": "Tier 5 — Prime Weapons (Relics)",
         "desc": "Farm relics / radshares; RNG-dependent",
         "filter": lambda i: (
-            i.get("isPrime")
-            and i.get("category") in ("Primary", "Secondary", "Melee")
+            i.get("isPrime") and i.get("category") in ("Primary", "Secondary", "Melee")
         ),
     },
     {
         "id": "6",
         "label": "Tier 6 — Prime Warframes (Relics)",
         "desc": "Farm relics / radshares; 6,000 MR each",
-        "filter": lambda i: (
-            i.get("isPrime")
-            and i.get("category") == "Warframes"
-        ),
+        "filter": lambda i: i.get("isPrime") and i.get("category") == "Warframes",
     },
     {
         "id": "7",
@@ -89,6 +87,7 @@ TIERS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _has_tag(item: dict, tag: str) -> bool:
     tags = item.get("tags") or []
@@ -135,16 +134,8 @@ def _tier_index(item: dict) -> int:
     return len(TIERS) - 1
 
 
-def _item_source(item: dict) -> str:
-    """Return the acquisition source label for *item*."""
-    name = item.get("name", "")
-    un = item.get("uniqueName", "")
-    tags = {str(t) for t in (item.get("tags") or [])}
-
-    # ── Tags with unambiguous mapping ──────────────────────────────
-    # ── Tag-based Lich / Sister / Coda detection ───────────────────
-    # (some Coda/Kuva/Tenet items lack the correct tag in the export DB,
-    # so we also check via _is_lich_item as a fallback)
+def _source_by_tags(item: dict, tags: set[str]) -> str | None:
+    """Determine source from tag checks (Lich, Invasion, Syndicate, etc.)."""
     if "Technocyte Coda" in tags:
         return "Coda"
     if "Kuva Lich" in tags:
@@ -152,12 +143,12 @@ def _item_source(item: dict) -> str:
     if "Tenet" in tags:
         return "Sister"
     if _is_lich_item(item):
-        name_prefix = name.split(" ")[0]
+        name_prefix = item.get("name", "").split(" ")[0]
         if name_prefix in ("Kuva",):
             return "Lich"
         if name_prefix in ("Tenet",):
             return "Sister"
-        if name_prefix in ("Coda",) or name.startswith("Dual Coda"):
+        if name_prefix in ("Coda",) or item.get("name", "").startswith("Dual Coda"):
             return "Coda"
     if "Invasion Reward" in tags:
         return "Invasion"
@@ -173,13 +164,21 @@ def _item_source(item: dict) -> str:
         return "Zariman (Holdfasts)"
     if "Entrati" in tags:
         return "Deimos (Entrati)"
-
-    for synd in ("Steel Meridian", "Red Veil", "Perrin Sequence",
-                 "New Loka", "Cephalon Suda", "Arbiters of Hexis"):
+    for synd in (
+        "Steel Meridian",
+        "Red Veil",
+        "Perrin Sequence",
+        "New Loka",
+        "Cephalon Suda",
+        "Arbiters of Hexis",
+    ):
         if synd in tags:
             return f"Syndicate ({synd})"
+    return None
 
-    # ── uniqueName path patterns ───────────────────────────────────
+
+def _source_by_unique_name(un: str) -> str | None:
+    """Determine source from *uniqueName* path patterns."""
     if "ClanTech" in un:
         return "Dojo Research"
     if "MK1Series" in un:
@@ -200,13 +199,17 @@ def _item_source(item: dict) -> str:
         return "Conclave"
     if "/Vehicles/Hoverboard" in un:
         return "Fortuna (Ventkids)"
-
+    if "/Sentinels/SentinelWeapons" in un:
+        return "Market"
+    if "/MoaPets/" in un and "Weapon" in un:
+        return "Fortuna (Solaris)"
     if "OperatorAmplifiers" in un and "Barrel" in un:
-        if "CorpAmp" in un:
-            return "Fortuna (Vox Solaris)"
-        return "Cetus (Quills)"
+        return "Fortuna (Vox Solaris)" if "CorpAmp" in un else "Cetus (Quills)"
+    return None
 
-    # ── Name patterns ──────────────────────────────────────────────
+
+def _source_by_name(name: str) -> str | None:
+    """Determine source from *name* patterns and known quest rewards."""
     if name.startswith("Dex "):
         return "Daily Tribute"
     if name.startswith("MK1-"):
@@ -215,56 +218,64 @@ def _item_source(item: dict) -> str:
         return "Baro Ki'teer"
     if name == "Excalibur Umbra":
         return "Quest (The Second Dream)"
-
-    # Login / daily tribute rewards
     if name in ("Azima", "Zenistar", "Zenith", "Sigma & Octantis"):
         return "Daily Tribute"
-
-    # Known quest rewards
-    if name in ("Broken War", "Broken Scepter", "Skiajati",
-                "Paracesis", "Nataruk", "Sirocco", "Xoris",
-                "Orvius", "Shedu"):
+    if name in (
+        "Broken War",
+        "Broken Scepter",
+        "Skiajati",
+        "Paracesis",
+        "Nataruk",
+        "Sirocco",
+        "Xoris",
+        "Orvius",
+        "Shedu",
+    ):
         return "Quest"
-
-    # Sentinel and companion weapons — purchase from Market
-    if "/Sentinels/SentinelWeapons" in un:
-        return "Market"
-    if "/MoaPets/" in un and "Weapon" in un:
-        return "Fortuna (Solaris)"
-
-    # Nightwave / special event
     if name == "Wolf Sledge":
         return "Nightwave"
+    return None
 
-    # ── Necramechs ─────────────────────────────────────────────────
-    if _is_necramech(item):
-        return "Deimos (Necraloid)"
 
-    # ── Category fallbacks ─────────────────────────────────────────
-    cat = item.get("category", "")
-    # Prime check must come before individual category checks so that
-    # Prime Sentinels (cat="Sentinels"), Prime Archwings, etc. get
-    # "Relics" instead of "Market" / "Dojo Research".
+def _source_by_category(item: dict) -> str:
+    """Determine source from item category and prime status."""
     if item.get("isPrime"):
         return "Relics"
+    cat = item.get("category", "")
     if cat in ("Sentinels", "Pets"):
         return "Market"
     if cat in ("Archwing", "Arch-Melee"):
         return "Dojo Research"
-
-    # ── Base warframes ─────────────────────────────────────────────
     if cat == "Warframes":
         return "Market"
-
-    # ── General weapon fallback ────────────────────────────────────
-    # Most Primary / Secondary / Melee weapons are credit blueprints
-    # from the Market.  More specific sources (Dojo, Syndicate,
-    # Baro, Invasion, etc.) are caught above.
     if cat in ("Primary", "Secondary", "Melee", "Arch-Gun"):
         return "Market"
-
-    # catch-all
     return "Various"
+
+
+def _item_source(item: dict) -> str:
+    """Return the acquisition source label for *item*."""
+    name = item.get("name", "")
+    un = item.get("uniqueName", "")
+    tags = {str(t) for t in (item.get("tags") or [])}
+
+    source = _source_by_tags(item, tags)
+    if source:
+        return source
+
+    source = _source_by_unique_name(un)
+    if source:
+        return source
+
+    if _is_necramech(item):
+        return "Deimos (Necraloid)"
+
+    source = _source_by_name(name)
+    if source:
+        return source
+
+    return _source_by_category(item)
+
 
 def _max_xp_for_item(item: dict) -> int:
     """Return the expected cumulative XP when *item* reaches max rank.
@@ -353,10 +364,7 @@ def _modular_features(inv: dict, component_path: str) -> int | None:
             # (companion pets like Predasites / Vulpaphylas / MOAs).  Regular
             # pets, weapons and K-drives don't have ModularParts and should
             # never be subject to a gilding check.
-            if (
-                item.get("ModularParts")
-                and (item.get("ItemType") or "").lower() == needle
-            ):
+            if item.get("ModularParts") and (item.get("ItemType") or "").lower() == needle:
                 return item.get("Features")
 
     return None
@@ -365,6 +373,7 @@ def _modular_features(inv: dict, component_path: str) -> int | None:
 # ---------------------------------------------------------------------------
 # Mastery analysis
 # ---------------------------------------------------------------------------
+
 
 def _build_ever_leveled(inv: dict) -> set[str]:
     """Build a set of all item paths the player has ever ranked up.
@@ -405,77 +414,68 @@ def _build_ever_leveled(inv: dict) -> set[str]:
     return leveled
 
 
-def analyze_mastery(
-    db: ExportDB,
-    inv: dict,
-) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]]]:
-    """Cross-reference player progress against the masterable item list.
-
-    Items are classified into three buckets:
-
-    * **Mastered** — cumulative XP >= the expected max for that item type.
-    * **In progress** — some XP but below the max threshold.
-    * **Never touched** — no XP at all.
-
-    Args:
-        db:  Loaded game export database.
-        inv: Player inventory dict (may contain ``XPInfo`` from profile).
-
-    Returns:
-        ``(total, mastered_count, unmastered, in_progress)``
-        where the last two are ``[(item_dict, tier_index), ...]`` lists.
-    """
-    ever_leveled = _build_ever_leveled(inv)
-
-    # These items are flagged as masterable in the export DB but can never
-    # be obtained (founder exclusives).  Filter them out so they don't
-    # appear as false "gaps" in the report.
-    _UNOBTAINABLE_PATHS = frozenset({
-        "/Lotus/Powersuits/Excalibur/ExcaliburPrime",       # Excalibur Prime
-        "/Lotus/Weapons/Tenno/Pistol/LatoPrime",            # Lato Prime
-        "/Lotus/Weapons/Tenno/Melee/LongSword/SkanaPrime",  # Skana Prime
-    })
-
+def _filter_masterable_items(db):
+    """Return list of masterable items from the export DB (excl. unobtainable)."""
+    _unobtainable_paths = frozenset(
+        {
+            "/Lotus/Powersuits/Excalibur/ExcaliburPrime",
+            "/Lotus/Weapons/Tenno/Pistol/LatoPrime",
+            "/Lotus/Weapons/Tenno/Melee/LongSword/SkanaPrime",
+        }
+    )
     masterable = []
     for item in db.items:
         un = item.get("uniqueName")
-        if not un or un in _UNOBTAINABLE_PATHS:
+        if not un or un in _unobtainable_paths:
             continue
         is_masterable = item.get("masterable") is True
-        # Amp prisms are components whose game export entry erroneously has
-        # masterable=False.  They contribute 3 000 MR (same as a secondary
-        # weapon) when the completed amp is gilded and levelled to 30.
-        # Skip blueprint entries — they have empty names and the real
-        # non-blueprint prism entry will be picked up instead.
         if not is_masterable and "OperatorAmplifiers" in un and "Barrel" in un:
             if "Blueprint" not in un:
                 is_masterable = True
         if is_masterable:
             masterable.append(item)
+    return masterable
+
+
+def _classify_mastery_item(
+    item: dict,
+    ever_leveled: set,
+    inv: dict,
+) -> tuple[str, int]:  # ("unmastered"|"in_progress"|"mastered", tier_index)
+    """Classify one masterable item and return ``(bucket, tier_index)``."""
+    un = item["uniqueName"].lower()
+    if un not in ever_leveled:
+        return "unmastered", _tier_index(item)
+    xp = _item_xp(inv, un)
+    max_xp = _max_xp_for_item(item)
+    features = _modular_features(inv, item["uniqueName"])
+    if features is not None and (features & 8) == 0:
+        return "in_progress", _tier_index(item)
+    if xp >= max_xp:
+        return "mastered", _tier_index(item)
+    return "in_progress", _tier_index(item)
+
+
+def analyze_mastery(
+    db: ExportDB,
+    inv: dict,
+) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]]]:
+    """Cross-reference player progress against the masterable item list."""
+    ever_leveled = _build_ever_leveled(inv)
+    masterable = _filter_masterable_items(db)
 
     mastered = 0
     unmastered: list[tuple[dict, int]] = []
     in_progress: list[tuple[dict, int]] = []
 
     for item in masterable:
-        un = item["uniqueName"].lower()
-        if un not in ever_leveled:
-            unmastered.append((item, _tier_index(item)))
+        bucket, t_idx = _classify_mastery_item(item, ever_leveled, inv)
+        if bucket == "unmastered":
+            unmastered.append((item, t_idx))
+        elif bucket == "in_progress":
+            in_progress.append((item, t_idx))
         else:
-            xp = _item_xp(inv, un)
-            max_xp = _max_xp_for_item(item)
-
-            # Modular components (amp prisms, zaw strikes, kitgun chambers)
-            # must be gilded before they contribute MR.  If the assembled
-            # weapon is currently in the inventory and NOT gilded, the
-            # component cannot be mastered regardless of total XP.
-            features = _modular_features(inv, item["uniqueName"])
-            if features is not None and (features & 8) == 0:
-                in_progress.append((item, _tier_index(item)))
-            elif xp >= max_xp:
-                mastered += 1
-            else:
-                in_progress.append((item, _tier_index(item)))
+            mastered += 1
 
     unmastered.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
     in_progress.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
@@ -486,6 +486,52 @@ def analyze_mastery(
 # ---------------------------------------------------------------------------
 # Report printing
 # ---------------------------------------------------------------------------
+
+
+def _print_mastery_section(
+    header: str,
+    desc: str,
+    items: list[tuple[dict, int]],
+    show_detail: bool = True,
+) -> None:
+    """Print one mastery section (never-touched or in-progress) grouped by tier."""
+    if not items:
+        return
+    tier_groups: list[list[dict]] = [[] for _ in TIERS]
+    for item, t_idx in items:
+        tier_groups[t_idx].append(item)
+
+    for t_idx, (tier, group) in enumerate(zip(TIERS, tier_groups)):
+        if not group:
+            continue
+        count = len(group)
+        mr = sum(_item_mr(i) for i in group)
+        print(f"{'─' * 68}")
+        label = f"{header} — {tier['label']}" if show_detail else header
+        print(f"  {label}")
+        if show_detail:
+            print(f"  {tier['desc']}")
+        print(f"  {count} items  ~{mr:,} MR")
+        print()
+
+        t = PrettyTable()
+        t.set_style(TableStyle.DEFAULT)
+        t.field_names = ["Item", "Category", "MR", "Source"]
+        t.align["Item"] = "l"
+        t.align["Category"] = "l"
+        t.align["MR"] = "r"
+        t.align["Source"] = "l"
+
+        for item in group:
+            name = item.get("name", item.get("uniqueName", "?"))
+            cat = item.get("category", "")
+            mr_val = _item_mr(item)
+            src = _item_source(item)
+            t.add_row([name, cat, mr_val, src])
+
+        print(t)
+        print()
+
 
 def print_report(
     total: int,
@@ -499,64 +545,20 @@ def print_report(
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
     print("=" * 68)
-    print(f"  {mastered} / {total} masterable items mastered "
-          f"({mastered * 100 // total}%)")
-    print(f"  {len(unmastered)} items never touched"
-          f"  {len(in_progress)} in progress"
-          f"  {remaining} remaining")
-    total_mr = (
-        sum(_item_mr(item) for item, _ in unmastered)
-        + sum(_item_mr(item) for item, _ in in_progress)
+    print(f"  {mastered} / {total} masterable items mastered ({mastered * 100 // total}%)")
+    print(
+        f"  {len(unmastered)} items never touched"
+        f"  {len(in_progress)} in progress"
+        f"  {remaining} remaining"
+    )
+    total_mr = sum(_item_mr(item) for item, _ in unmastered) + sum(
+        _item_mr(item) for item, _ in in_progress
     )
     print(f"  ~{total_mr:,} MR available from unmastered items")
     print()
 
-    # Group by tier for display.
-    def _print_section(
-        header: str,
-        desc: str,
-        items: list[tuple[dict, int]],
-        show_detail: bool = True,
-    ) -> None:
-        if not items:
-            return
-        tier_groups: list[list[dict]] = [[] for _ in TIERS]
-        for item, t_idx in items:
-            tier_groups[t_idx].append(item)
-
-        for t_idx, (tier, group) in enumerate(zip(TIERS, tier_groups)):
-            if not group:
-                continue
-            count = len(group)
-            mr = sum(_item_mr(i) for i in group)
-            print(f"{'─' * 68}")
-            label = f"{header} — {tier['label']}" if show_detail else header
-            print(f"  {label}")
-            if show_detail:
-                print(f"  {tier['desc']}")
-            print(f"  {count} items  ~{mr:,} MR")
-            print()
-
-            t = PrettyTable()
-            t.set_style(TableStyle.DEFAULT)
-            t.field_names = ["Item", "Category", "MR", "Source"]
-            t.align["Item"] = "l"
-            t.align["Category"] = "l"
-            t.align["MR"] = "r"
-            t.align["Source"] = "l"
-
-            for item in group:
-                name = item.get("name", item.get("uniqueName", "?"))
-                cat = item.get("category", "")
-                mr_val = _item_mr(item)
-                src = _item_source(item)
-                t.add_row([name, cat, mr_val, src])
-
-            print(t)
-            print()
-
-    _print_section("NEVER TOUCHED", "No XP recorded", unmastered)
-    _print_section("IN PROGRESS", "Partial XP, not yet max rank", in_progress)
+    _print_mastery_section("NEVER TOUCHED", "No XP recorded", unmastered)
+    _print_mastery_section("IN PROGRESS", "Partial XP, not yet max rank", in_progress)
 
     print("=" * 68)
     print(f"  {remaining} items remaining  ~{total_mr:,} MR to earn")
@@ -567,11 +569,14 @@ def print_report(
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main(args) -> None:
     """Entry point for the ``--mastery`` sub-command."""
     db, inv = load_data(
-        args.items_cache, args.refresh_items,
-        args.inventory, args.refresh,
+        args.items_cache,
+        args.refresh_items,
+        args.inventory,
+        args.refresh,
     )
 
     total, mastered, unmastered, in_progress = analyze_mastery(db, inv)

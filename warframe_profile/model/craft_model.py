@@ -5,6 +5,21 @@ This module contains only pure data-processing functions (the **model**
 in MVP).  Presentation (ANSI colour, PrettyTable, ``print()``) lives in
 :mod:`warframe_profile.report`; orchestration lives in
 :mod:`warframe_profile.scripts.craft_tree`.
+
+The main entry points are:
+
+* :func:`resolve_tree` — recursively expand a crafting tree for a given item.
+* :func:`build_weapon_chains` — find weapon upgrade paths (e.g. MK1-Braton
+  → Braton → Braton Prime) where the final tier is unowned.
+* :func:`find_items` — search items by name substring for interactive lookup.
+
+Data flow:
+  1. Build indices from the raw DE export dict (``build_items_by_un``,
+     ``build_recipes_by_result``).
+  2. Optionally build a name lookup (``build_lookup``) for search.
+  3. Call ``resolve_tree`` to expand crafting requirements recursively.
+  4. Post-process results with ``compute_crafting_plan`` → ``decompose_raw_materials``
+     → ``preserve_blueprints`` to produce the final aggregated view.
 """
 
 import math
@@ -13,22 +28,34 @@ from collections import defaultdict
 
 from warframe_profile.model.utils import normalize_path
 
-
 # ---------------------------------------------------------------------------
 # Index builders
 # ---------------------------------------------------------------------------
+# These convert the raw DE export dict (with top-level keys like "warframes",
+# "weapons", "recipes") into flat lookup dictionaries keyed by uniqueName.
+# They are called once at startup by presenters.
+#
+
 
 def build_items_by_un(db: dict) -> dict:
     """Build a ``uniqueName.lower() → item`` lookup from the export.
 
-    Items are sourced from these top-level keys:
+    Items are sourced from these top-level keys of the DE export dict:
     ``warframes, weapons, resources, customs, gear, sentinels, keys``.
-    Each item gets a ``_source`` key so :func:`categorize` can work.
+    Each item gets a ``_source`` key so :func:`categorize` can determine
+    the human-readable category later.
+
+    The key is lowercased uniqueName for case-insensitive lookups.
     """
     items: dict = {}
     source_labels = [
-        "warframes", "weapons", "resources", "customs",
-        "gear", "sentinels", "keys",
+        "warframes",
+        "weapons",
+        "resources",
+        "customs",
+        "gear",
+        "sentinels",
+        "keys",
     ]
     for label in source_labels:
         for un, val in db.get(label, {}).items():
@@ -40,6 +67,11 @@ def build_items_by_un(db: dict) -> dict:
 
 def build_recipes_by_result(db: dict) -> dict:
     """Build a ``resultType.lower() → recipe`` lookup.
+
+    The DE export stores recipes keyed by their uniqueName (like
+    ``/Lotus/Recipes/Weapons/LatoPrimeBlueprint``).  This function
+    re-indexes them by their ``resultType`` — the uniqueName of the
+    item produced — which is what the crafting tree resolver needs.
 
     Only the first recipe per ``resultType`` is kept (duplicate
     resultTypes are discarded).
@@ -61,6 +93,7 @@ def build_recipes_by_result(db: dict) -> dict:
 # Name resolution
 # ---------------------------------------------------------------------------
 
+
 def resolve_name(name: str, loc_dict: dict) -> str:
     """Resolve a ``/Lotus/Language/...`` key to its human-readable form.
 
@@ -74,29 +107,29 @@ def resolve_name(name: str, loc_dict: dict) -> str:
 
 #: Maps in-game ``productCategory`` values to human-readable labels.
 _CATEGORY_BY_PC = {
-    "Suits":             "Warframe",
-    "MechSuits":         "Necramech",
-    "LongGuns":          "Primary",
-    "Pistols":           "Secondary",
-    "Melee":             "Melee",
-    "SpaceGuns":         "Arch-Gun",
-    "SpaceMelee":        "Arch-Melee",
-    "SpaceSuits":        "Archwing",
-    "Sentinels":         "Sentinel",
-    "SentinelWeapons":   "Sentinel Weapon",
-    "OperatorAmps":      "Operator Amp",
-    "DrifterMelee":      "Drifter Melee",
-    "Ships":             "Ship",
-    "CrewShips":         "Crew Ship",
+    "Suits": "Warframe",
+    "MechSuits": "Necramech",
+    "LongGuns": "Primary",
+    "Pistols": "Secondary",
+    "Melee": "Melee",
+    "SpaceGuns": "Arch-Gun",
+    "SpaceMelee": "Arch-Melee",
+    "SpaceSuits": "Archwing",
+    "Sentinels": "Sentinel",
+    "SentinelWeapons": "Sentinel Weapon",
+    "OperatorAmps": "Operator Amp",
+    "DrifterMelee": "Drifter Melee",
+    "Ships": "Ship",
+    "CrewShips": "Crew Ship",
     "CrewShipWeaponSkins": "Ship Cosmetic",
-    "ShipDecorations":   "Cosmetic",
-    "WeaponSkins":       "Cosmetic",
-    "KubrowPets":        "Pet",
-    "MoaPets":           "Pet",
-    "FusionTreasures":   "Curio",
-    "SpecialItems":      "Special",
-    "SupplyDrop":        "Supply",
-    "MiscItems":         "Resources",
+    "ShipDecorations": "Cosmetic",
+    "WeaponSkins": "Cosmetic",
+    "KubrowPets": "Pet",
+    "MoaPets": "Pet",
+    "FusionTreasures": "Curio",
+    "SpecialItems": "Special",
+    "SupplyDrop": "Supply",
+    "MiscItems": "Resources",
 }
 
 
@@ -124,6 +157,7 @@ def categorize(item: dict) -> str:
 # Recipe helpers
 # ---------------------------------------------------------------------------
 
+
 def has_recipe(item_un_lower: str, recipes_by_result: dict) -> bool:
     """Check if an item has a known recipe."""
     return item_un_lower in recipes_by_result
@@ -144,21 +178,25 @@ def get_recipe_components(
     for ing in recipe["ingredients"]:
         ing_un = ing["ItemType"]
         ing_item = items_by_un.get(ing_un.lower())
-        ing_name = (
-            resolve_name(ing_item.get("name", ""), _loc)
-            if ing_item else ""
+        ing_name = resolve_name(ing_item.get("name", ""), _loc) if ing_item else ""
+        comps.append(
+            {
+                "uniqueName": ing_un,
+                "name": ing_name,
+                "itemCount": ing["ItemCount"],
+            }
         )
-        comps.append({
-            "uniqueName": ing_un,
-            "name": ing_name,
-            "itemCount": ing["ItemCount"],
-        })
     return comps
 
 
 # ---------------------------------------------------------------------------
 # Search / lookup
 # ---------------------------------------------------------------------------
+# The ``--craft`` sub-command supports name-based item search.  These
+# functions build a name index and find items by substring matching with
+# relevance scoring (exact → starts-with → word match → loose).
+#
+
 
 def build_lookup(items_by_un: dict, loc_dict: dict) -> dict:
     """Build a ``name.lower() → [items]`` lookup for text search."""
@@ -201,6 +239,18 @@ def find_items(query: str, by_name: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Tree resolution
 # ---------------------------------------------------------------------------
+# The core of the crafting tree analysis.  ``resolve_tree`` recursively
+# expands an item into its component requirements, following the recipe
+# chain until either:
+#   - The component has no recipe (raw material).
+#   - Max depth is reached.
+#   - The component is a blueprint (blueprints are treated as leaves).
+#
+# Returns (requirements, craftables) where:
+#   requirements — raw materials / non-craftable components needed.
+#   craftables   — intermediate items that need to be built first.
+#
+
 
 def _is_resource_transform(recipe: dict) -> bool:
     """Return ``True`` if the recipe key ends with ``ResourceBlueprint``."""
@@ -257,6 +307,151 @@ def display_name(
     return comp_un_lower.split("/")[-1]
 
 
+def _leaf_result(
+    item_un: str,
+    quantity: int,
+    item_name: str,
+    parent_name: str | None,
+    owned: dict,
+) -> tuple[dict, dict]:
+    """Build a leaf-node result for an item with no further components."""
+    name = item_name or un_to_name(item_un)
+    if parent_name and ("blueprint" in name.lower() or is_blueprint_un(item_un)):
+        name = f"{parent_name} Blueprint"
+    return {
+        item_un.lower(): {
+            "name": name,
+            "quantity": quantity,
+            "owned": owned.get(normalize_path(item_un), 0),
+        }
+    }, {}  # noqa: E501
+
+
+def _register_self_craftable(
+    item_un: str,
+    quantity: int,
+    item_name: str,
+    owned_qty: int,
+    owned: dict,
+    num_crafts: int,
+    build_qty: int,
+    recipe: dict,
+) -> tuple[dict, dict]:
+    """Register the item itself in craftables and its blueprint in requirements."""
+    result: dict = {}
+    craftables: dict = {}
+    if owned_qty < quantity:
+        craftables[item_un.lower()] = {
+            "name": item_name or un_to_name(item_un),
+            "quantity": quantity,
+            "owned": owned_qty,
+            "num_crafts": num_crafts,
+            "build_qty": build_qty,
+        }
+        recipe_key = recipe.get("_recipeKey", "")
+        if recipe_key:
+            bp_owned = owned.get(normalize_path(recipe_key), 0)
+            if bp_owned < 1:
+                bp_name = f"{item_name} Blueprint" if item_name else un_to_name(recipe_key)
+                result[recipe_key.lower()] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
+    return result, craftables
+
+
+def _compute_effective_crafts(
+    quantity: int,
+    build_qty: int,
+    owned: dict,
+    item_un: str,
+    depth: int,
+    num_crafts: int,
+) -> int:
+    """Compute how many times we must craft to cover the shortage."""
+    if depth > 0:
+        item_owned_qty = owned.get(normalize_path(item_un), 0)
+        remaining_qty = max(0, quantity - item_owned_qty)
+        return max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
+    return num_crafts
+
+
+def _aggregate_components(components: list) -> dict[str, dict]:
+    """Group duplicate components and sum their counts."""
+    agg: dict[str, dict] = {}
+    for comp in components:
+        key = comp.get("uniqueName", "").lower()
+        if key in agg:
+            agg[key]["itemCount"] += comp.get("itemCount", 1)
+        else:
+            agg[key] = dict(comp)
+    return agg
+
+
+def _merge_sub_into(dest: dict, sub: dict) -> None:
+    """Merge *sub* entries into *dest*, summing quantities on conflict."""
+    for k, v in sub.items():
+        if k in dest:
+            dest[k]["quantity"] += v["quantity"]
+        else:
+            dest[k] = dict(v)
+
+
+def _process_expanded_component(
+    comp_un: str,
+    total: int,
+    items_by_un: dict,
+    owned: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+    depth: int,
+    max_depth: int,
+    parent_name: str | None,
+) -> tuple[dict, dict]:
+    """Recursively resolve a component that should be expanded."""
+    return resolve_tree(
+        comp_un,
+        total,
+        items_by_un,
+        owned,
+        recipes_by_result,
+        loc_dict,
+        depth + 1,
+        max_depth,
+        parent_name,
+    )  # noqa: E501
+
+
+def _process_unexpanded_component(
+    comp_un_lower: str,
+    total: int,
+    comp: dict,
+    items_by_un: dict,
+    owned: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+    depth: int,
+    max_depth: int,
+    parent_name: str | None,
+) -> tuple[dict, dict]:
+    """Add an unexpanded component to craftables or requirements."""
+    is_bp = "blueprint" in comp.get("name", "").lower() or is_blueprint_un(
+        comp.get("uniqueName", "")
+    )  # noqa: E501
+    is_craftable = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp)
+    name = display_name(comp, items_by_un, parent_name, loc_dict)
+    comp_owned = owned.get(normalize_path(comp.get("uniqueName", "")), 0)
+
+    if is_craftable:
+        comp_recipe = recipes_by_result.get(comp_un_lower, {})
+        return {}, {
+            comp_un_lower: {
+                "name": name,
+                "quantity": total,
+                "owned": comp_owned,
+                "build_qty": comp_recipe.get("num", 1) or 1,
+            }
+        }  # noqa: E501
+    return {comp_un_lower: {"name": name, "quantity": total, "owned": comp_owned}}, {}
+
+
 def resolve_tree(
     item_un: str,
     quantity: int,
@@ -277,143 +472,84 @@ def resolve_tree(
     """
     item_un_lower = item_un.lower()
     item = items_by_un.get(item_un_lower)
-    recipe_components = (
+    components = (
         get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
-    )
-    components = recipe_components
+    )  # noqa: E501
 
     if not item and not components:
         return {}, {}
 
-    item_name = (
-        resolve_name(item.get("name", ""), loc_dict)
-        if item else un_to_name(item_un)
-    )
+    item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
 
     if not components or depth >= max_depth:
-        name = item_name or un_to_name(item_un)
-        if parent_name and ("blueprint" in name.lower()
-                            or is_blueprint_un(item_un)):
-            name = f"{parent_name} Blueprint"
-        return (
-            {item_un_lower: {
-                "name": name,
-                "quantity": quantity,
-                "owned": owned.get(normalize_path(item_un), 0),
-            }},
-            {},
-        )
+        return _leaf_result(item_un, quantity, item_name, parent_name, owned)
 
-    recipe = recipes_by_result.get(item_un_lower)
+    recipe = recipes_by_result[item_un_lower]
     build_qty = recipe.get("num", 1) or 1
     consumable = recipe.get("consumeOnUse", True)
-
     num_crafts = max(1, math.ceil(quantity / build_qty))
 
-    craftables: dict = {}
     result: dict = {}
+    craftables: dict = {}
 
     if depth > 0 and components:
         norm = normalize_path(item_un)
         owned_qty = owned.get(norm, 0)
-        if owned_qty < quantity:
-            craftables[item_un_lower] = {
-                "name": item_name or un_to_name(item_un),
-                "quantity": quantity,
-                "owned": owned_qty,
-                "num_crafts": num_crafts,
-                "build_qty": build_qty,
-            }
+        bp_result, self_craft = _register_self_craftable(
+            item_un, quantity, item_name, owned_qty, owned, num_crafts, build_qty, recipe
+        )  # noqa: E501
+        result.update(bp_result)
+        craftables.update(self_craft)
 
-            recipe_key = recipe.get("_recipeKey", "")
-            if recipe_key:
-                bp_owned = owned.get(normalize_path(recipe_key), 0)
-                if bp_owned < 1:
-                    bp_name = (
-                        f"{item_name} Blueprint"
-                        if item_name else un_to_name(recipe_key)
-                    )
-                    result[recipe_key.lower()] = {
-                        "name": bp_name,
-                        "quantity": 1,
-                        "owned": bp_owned,
-                    }
-
-    if depth > 0:
-        item_owned_qty = owned.get(normalize_path(item_un), 0)
-        remaining_qty = max(0, quantity - item_owned_qty)
-        effective_crafts = max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
-    else:
-        effective_crafts = num_crafts
-
-    agg_components: dict[str, dict] = {}
-    for comp in components:
-        key = comp.get("uniqueName", "").lower()
-        if key in agg_components:
-            agg_components[key]["itemCount"] += comp.get("itemCount", 1)
-        else:
-            agg_components[key] = dict(comp)
+    effective_crafts = _compute_effective_crafts(
+        quantity, build_qty, owned, item_un, depth, num_crafts
+    )  # noqa: E501
+    agg_components = _aggregate_components(components)
 
     for comp_un_lower, comp in agg_components.items():
         comp_un = comp.get("uniqueName", "")
         comp_count = comp.get("itemCount", 1)
 
         is_bp = "blueprint" in comp.get("name", "").lower() or is_blueprint_un(comp_un)
-        if is_bp and not consumable:
-            total = comp_count
-        else:
-            total = effective_crafts * comp_count
+        total = comp_count if (is_bp and not consumable) else effective_crafts * comp_count
 
         comp_owned = owned.get(normalize_path(comp_un), 0)
         expand = (
             should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp)
             and comp_owned < total
-        )
+        )  # noqa: E501
 
         if expand:
-            sub, sub_craft = resolve_tree(
-                comp_un, total, items_by_un, owned,
-                recipes_by_result, loc_dict,
-                depth + 1, max_depth, item_name,
-            )
-            for k, v in sub.items():
-                if k in result:
-                    result[k]["quantity"] += v["quantity"]
-                else:
-                    result[k] = dict(v)
-            for k, v in sub_craft.items():
-                if k in craftables:
-                    craftables[k]["quantity"] += v["quantity"]
-                else:
-                    craftables[k] = dict(v)
+            sub, sub_craft = _process_expanded_component(
+                comp_un,
+                total,
+                items_by_un,
+                owned,
+                recipes_by_result,
+                loc_dict,
+                depth,
+                max_depth,
+                item_name,
+            )  # noqa: E501
+            _merge_sub_into(result, sub)
+            _merge_sub_into(craftables, sub_craft)
         else:
-            # Check if this component has a recipe (is craftable)
-            is_craftable = should_expand(
-                comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
-            )
-            name = display_name(comp, items_by_un, item_name, loc_dict)
-            if is_craftable:
-                if comp_un_lower in craftables:
-                    craftables[comp_un_lower]["quantity"] += total
-                else:
-                    comp_recipe = recipes_by_result.get(comp_un_lower, {})
-                    craftables[comp_un_lower] = {
-                        "name": name,
-                        "quantity": total,
-                        "owned": comp_owned,
-                        "build_qty": comp_recipe.get("num", 1) or 1,
-                    }
-            else:
-                if comp_un_lower in result:
-                    result[comp_un_lower]["quantity"] += total
-                else:
-                    result[comp_un_lower] = {
-                        "name": name,
-                        "quantity": total,
-                        "owned": comp_owned,
-                    }
+            sub_req, sub_craft = _process_unexpanded_component(
+                comp_un_lower,
+                total,
+                comp,
+                items_by_un,
+                owned,
+                recipes_by_result,
+                loc_dict,
+                depth,
+                max_depth,
+                item_name,
+            )  # noqa: E501
+            _merge_sub_into(result, sub_req)
+            _merge_sub_into(craftables, sub_craft)
 
     return result, craftables
 
@@ -421,6 +557,7 @@ def resolve_tree(
 # ---------------------------------------------------------------------------
 # Blueprint / name helpers
 # ---------------------------------------------------------------------------
+
 
 def is_blueprint_un(un: str) -> bool:
     """Check if a uniqueName represents a blueprint."""
@@ -433,7 +570,8 @@ def un_to_name(un: str) -> str:
     name = name.replace("Component", "").replace("Blueprint", "")
     name = re.sub(
         r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])",
-        " ", name,
+        " ",
+        name,
     )
     return name.strip()
 
@@ -461,6 +599,16 @@ def merge_dicts(acc: dict, src: dict, *fields: str) -> None:
 # ---------------------------------------------------------------------------
 # Post-processing pipeline
 # ---------------------------------------------------------------------------
+# After ``resolve_tree`` produces (requirements, craftables), the
+# post-processing steps refine the output:
+#
+# 1. compute_crafting_plan — adjusts num_crafts based on owned quantities.
+# 2. decompose_raw_materials — replaces craftable intermediates with their
+#    raw ingredients, and adds blueprint entries for items not yet owned.
+# 3. preserve_blueprints — ensures blueprint requirements that were replaced
+#    by raw materials are still shown if not yet owned.
+#
+
 
 def compute_crafting_plan(craftables: dict, owned: dict) -> dict:
     """Compute ``num_crafts`` for each craftable from remaining after owned.
@@ -528,8 +676,7 @@ def decompose_raw_materials(
             else:
                 item = items_by_un.get(ing_lower, {})
                 ing_name = (
-                    resolve_name(item.get("name", ""), loc_dict)
-                    if item else un_to_name(ing_type)
+                    resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(ing_type)
                 )
                 requirements[ing_lower] = {
                     "name": ing_name,
@@ -555,28 +702,24 @@ def preserve_blueprints(
 # ---------------------------------------------------------------------------
 # Weapon chain analysis
 # ---------------------------------------------------------------------------
+# Warframe has weapon upgrade paths where a lower-tier weapon is used as
+# an ingredient to craft a higher-tier version.  For example:
+#
+#   MK1-Braton → Braton → Braton Prime
+#
+# ``build_weapon_chains`` discovers all such chains in the game database
+# and filters to those where the final weapon is not yet owned.  This
+# helps players identify which weapons to keep (they're needed for the
+# upgrade) vs sell (they're dead ends).
+#
 
-def build_weapon_chains(
+
+def _build_weapon_graph(
     items_by_un: dict,
     recipes_by_result: dict,
-    owned: dict,
-    loc_dict: dict,
-    max_depth: int = 5,
-) -> tuple[list[list[str]], dict, dict, int]:
-    """Build weapon upgrade chains whose final weapon is not yet owned.
-
-    Returns ``(chains, all_requirements, all_craftables, shown_count)``
-    where *chains* is a list of ``[root_un, ..., final_un]`` paths and the
-    remaining values aggregate their crafting requirements.
-    """
-    _WEAPON_CATS = {"Primary", "Secondary", "Melee"}
-
-    weapon_uns: set[str] = {
-        un_lower
-        for un_lower, item in items_by_un.items()
-        if categorize(item) in _WEAPON_CATS
-    }
-
+    weapon_uns: set[str],
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Build weapon dependency graph: ``builds_into`` and ``built_from``."""
     builds_into: dict[str, list[str]] = defaultdict(list)
     built_from: dict[str, list[str]] = defaultdict(list)
 
@@ -589,11 +732,20 @@ def build_weapon_chains(
                 builds_into[ing_un_lower].append(result_un_lower)
                 built_from[result_un_lower].append(ing_un_lower)
 
+    return builds_into, built_from
+
+
+def _find_chains(
+    weapon_uns: set[str],
+    builds_into: dict,
+    built_from: dict,
+) -> list[list[str]]:
+    """Walk dependency graph to find linear upgrade chains."""
     roots = sorted(
-        un for un in weapon_uns
+        un
+        for un in weapon_uns
         if un in builds_into and (un not in built_from or not built_from[un])
     )
-
     chains: list[list[str]] = []
     for root in roots:
         chain = [root]
@@ -606,44 +758,78 @@ def build_weapon_chains(
                 break
         if len(chain) >= 2:
             chains.append(chain)
+    return chains
+
+
+def _aggregate_chain_requirements(
+    chain: list[str],
+    items_by_un: dict,
+    owned: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+    all_requirements: dict,
+    all_craftables: dict,
+    max_depth: int,
+) -> None:
+    """Resolve crafting tree for one chain and merge into accumulators."""
+    final_un = chain[-1]
+    final_norm = normalize_path(final_un)
+    if owned.get(final_norm, 0) > 0:
+        return
+
+    req, craft = resolve_tree(
+        final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
+    )  # noqa: E501
+    merge_dicts(all_requirements, req, "quantity")
+    merge_dicts(all_craftables, craft, "quantity")
+
+    recipe = recipes_by_result.get(final_un.lower())
+    if recipe:
+        bp_key = recipe.get("_recipeKey", "")
+        if bp_key:
+            bp_owned = owned.get(normalize_path(bp_key), 0)
+            if bp_owned < 1:
+                names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
+                bp_name = f"{names[-1]} Blueprint"
+                key = bp_key.lower()
+                if key in all_requirements:
+                    all_requirements[key]["quantity"] = max(all_requirements[key]["quantity"], 1)
+                else:
+                    all_requirements[key] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
+
+
+def build_weapon_chains(
+    items_by_un: dict,
+    recipes_by_result: dict,
+    owned: dict,
+    loc_dict: dict,
+    max_depth: int = 5,
+) -> tuple[list[list[str]], dict, dict, int]:
+    """Build weapon upgrade chains whose final weapon is not yet owned."""
+    _weapon_cats = {"Primary", "Secondary", "Melee"}
+
+    weapon_uns = {
+        un_lower for un_lower, item in items_by_un.items() if categorize(item) in _weapon_cats
+    }  # noqa: E501
+
+    builds_into, built_from = _build_weapon_graph(items_by_un, recipes_by_result, weapon_uns)
+    chains = _find_chains(weapon_uns, builds_into, built_from)
 
     all_requirements: dict[str, dict] = {}
     all_craftables: dict[str, dict] = {}
     shown = 0
 
     for chain in chains:
-        final_un = chain[-1]
-        final_norm = normalize_path(final_un)
-        if owned.get(final_norm, 0) > 0:
-            continue
-
-        req, craft = resolve_tree(
-            final_un, 1, items_by_un, owned,
-            recipes_by_result, loc_dict, max_depth=max_depth,
-        )
-        merge_dicts(all_requirements, req, "quantity")
-        merge_dicts(all_craftables, craft, "quantity")
-
-        recipe = recipes_by_result.get(final_un.lower())
-        if recipe:
-            bp_key = recipe.get("_recipeKey", "")
-            if bp_key:
-                bp_owned = owned.get(normalize_path(bp_key), 0)
-                if bp_owned < 1:
-                    names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
-                    bp_name = f"{names[-1]} Blueprint"
-                    key = bp_key.lower()
-                    if key in all_requirements:
-                        all_requirements[key]["quantity"] = max(
-                            all_requirements[key]["quantity"], 1,
-                        )
-                    else:
-                        all_requirements[key] = {
-                            "name": bp_name,
-                            "quantity": 1,
-                            "owned": bp_owned,
-                        }
-
+        _aggregate_chain_requirements(
+            chain,
+            items_by_un,
+            owned,
+            recipes_by_result,
+            loc_dict,
+            all_requirements,
+            all_craftables,
+            max_depth,
+        )  # noqa: E501
         shown += 1
 
     compute_crafting_plan(all_craftables, owned)

@@ -9,4 +9,5 @@ import os
 
 #: Absolute path to the project-level ``data/`` directory where cached
 #: inventory JSON, export-database dumps, and similar files live.
+#: Resolved relative to this package root so it works regardless of CWD.
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")

@@ -15,18 +15,28 @@ import argparse
 import os
 import sys
 
-from warframe_profile.model.inventory import (
-    ExportDB, fetch_de_profile, EQUIPMENT_SECTIONS, load_data,
-    InventoryFetchError, ProfileNotFoundError, build_mastered_set,
-)
 from warframe_profile.model.analysis import (
-    build_prime_map, analyze, build_relics_map, build_needed_drops,
-    build_owned, compute_sellable_equipment,
+    analyze,
+    build_needed_drops,
+    build_owned,
+    build_prime_map,
+    build_relics_map,
+    compute_sellable_equipment,
+)
+from warframe_profile.model.inventory import (
+    EQUIPMENT_SECTIONS,
+    ExportDB,
+    InventoryFetchError,
+    ProfileNotFoundError,
+    build_mastered_set,
+    fetch_de_profile,
+    load_data,
 )
 from warframe_profile.view.report import (
-    print_report, print_safe_relics, print_needed_drops,
+    print_needed_drops,
+    print_report,
+    print_safe_relics,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -39,7 +49,17 @@ def _run(
     inv: dict,
     show_relics: bool,
 ) -> None:
-    """Shared logic for both ``--ducats`` and ``--relics``."""
+    """Shared logic for both ``--ducats`` and ``--relics``.
+
+    Flow:
+        1. Build Prime map from the item database.
+        2. Fetch DE profile for display name + MR (non-fatal if it fails).
+        3. Build the set of mastered items (XP history).
+        4. Run core analysis (``analyze``).
+        5. Compute market-rebuyable equipment.
+        6. If ``--relics`` mode: compute needed drops + safe relics and print.
+           Otherwise: print the full ducat analysis report.
+    """
     items = db.items
     prime_map = build_prime_map(items)
     print(f"  {len(prime_map)} prime items", file=sys.stderr)
@@ -61,7 +81,9 @@ def _run(
 
     # Compute sellable equipment index.
     data.sellable = compute_sellable_equipment(
-        db, inv, EQUIPMENT_SECTIONS,
+        db,
+        inv,
+        EQUIPMENT_SECTIONS,
     )
 
     owned = build_owned(inv)
@@ -71,19 +93,19 @@ def _run(
         return
 
     # --relics mode: show relic tables only.
-    needed = build_needed_drops(items, inv, prime_map, owned,
-                                EQUIPMENT_SECTIONS, mastered=mastered)
+    needed = build_needed_drops(items, inv, prime_map, owned, EQUIPMENT_SECTIONS, mastered=mastered)
     print_needed_drops(needed)
-    relics = build_relics_map(items, inv, prime_map, owned,
-                              EQUIPMENT_SECTIONS, mastered=mastered)
+    relics = build_relics_map(items, inv, prime_map, owned, EQUIPMENT_SECTIONS, mastered=mastered)
     print_safe_relics(relics)
 
 
 def main(args) -> None:
     """Entry point for the ``--ducats`` sub-command."""
     db, inv = load_data(
-        args.items_cache, args.refresh_items,
-        args.inventory, args.refresh,
+        args.items_cache,
+        args.refresh_items,
+        args.inventory,
+        args.refresh,
     )
     _run(args, db, inv, show_relics=False)
 
@@ -91,18 +113,40 @@ def main(args) -> None:
 def relics_main(args) -> None:
     """Entry point for the ``--relics`` sub-command."""
     db, inv = load_data(
-        args.items_cache, args.refresh_items,
-        args.inventory, args.refresh,
+        args.items_cache,
+        args.refresh_items,
+        args.inventory,
+        args.refresh,
     )
     _run(args, db, inv, show_relics=True)
 
 
 if __name__ == "__main__":
     import argparse
+    import os
+
+    from warframe_profile import DATA_DIR
+
     _parser = argparse.ArgumentParser(description="Warframe Prime Part Analyzer")
     _parser.add_argument("--inventory", "-i", help="Path to cached inventory.json")
-    _parser.add_argument("--refresh", "-r", action="store_true", help="Fetch inventory from live Warframe process")
-    _parser.add_argument("--profile", "-p", default="57c71e613ade7fa2a211997b", help="DE account ID for player display")
-    _parser.add_argument("--items-cache", default=os.path.join(DATA_DIR, "export_db.json"), help="Path to the merged items export database")
-    _parser.add_argument("--refresh-items", action="store_true", help="Delete and re-load the items cache")
+    _parser.add_argument(
+        "--refresh",
+        "-r",
+        action="store_true",
+        help="Fetch inventory from live Warframe process",
+    )
+    _parser.add_argument(
+        "--profile",
+        "-p",
+        default="57c71e613ade7fa2a211997b",
+        help="DE account ID for player display",
+    )
+    _parser.add_argument(
+        "--items-cache",
+        default=os.path.join(DATA_DIR, "export_db.json"),
+        help="Path to the merged items export database",
+    )
+    _parser.add_argument(
+        "--refresh-items", action="store_true", help="Delete and re-load the items cache"
+    )
     main(_parser.parse_args())
