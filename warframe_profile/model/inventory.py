@@ -20,6 +20,8 @@ import urllib.error
 import urllib.request
 from collections import defaultdict
 
+from warframe_profile.model.utils import normalize_path
+
 
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
 INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={}&ct=STM"
@@ -208,17 +210,8 @@ def find_in_memory(
 # Inventory fetching (live vs cached)
 # ---------------------------------------------------------------------------
 
-def fetch_inventory() -> tuple[dict, str]:
-    """Scan Warframe memory for credentials and fetch the live inventory.
-
-    Returns:
-        ``(inventory_dict, account_id)``.
-    """
-    pid = find_warframe_pid()
-    account_id = ""
-    nonce = ""
-
-    # Search for either "&nonce=" or "accountId=" in process memory.
+def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
+    """Scan Warframe process memory for accountId and nonce."""
     for pattern in ("&nonce=", "accountId="):
         addr, chunk = find_in_memory(pid, pattern)
         if addr is None:
@@ -226,13 +219,21 @@ def fetch_inventory() -> tuple[dict, str]:
         url_str = chunk.decode("ascii", errors="replace")
         m = re.search(r"accountId=([a-z0-9]+)&nonce=(\d+)", url_str)
         if m:
-            account_id, nonce = m.group(1), m.group(2)
-            break
-    else:
-        raise InventoryFetchError(
-            "Could not find accountId/nonce in Warframe memory. "
-            "Make sure you're in the Orbiter."
-        )
+            return m.group(1), m.group(2)
+    raise InventoryFetchError(
+        "Could not find accountId/nonce in Warframe memory. "
+        "Make sure you're in the Orbiter."
+    )
+
+
+def fetch_inventory() -> tuple[dict, str]:
+    """Scan Warframe memory for credentials and fetch the live inventory.
+
+    Returns:
+        ``(inventory_dict, account_id)``.
+    """
+    pid = find_warframe_pid()
+    account_id, nonce = _find_credentials_in_memory(pid)
 
     inv_url = INVENTORY_URL.format(account_id, nonce)
     req = urllib.request.Request(
@@ -336,7 +337,6 @@ def parse_pending_recipes(
         A ``defaultdict[str, int]`` mapping normalised item path → quantity
         (typically 1 per pending slot).
     """
-    from warframe_profile.model.analysis import normalize_path
     pending: defaultdict[str, int] = defaultdict(int)
     for pr in inventory.get("PendingRecipes", []):
         recipe_key = pr.get("ItemType", "")
@@ -372,7 +372,6 @@ def build_owned(
     Returns:
         A ``defaultdict[str, int]`` mapping item path → quantity owned.
     """
-    from warframe_profile.model.analysis import normalize_path
     owned: defaultdict[str, int] = defaultdict(int)
     for item in inventory.get("MiscItems", []):
         owned[normalize_path(item.get("ItemType", ""))] += item.get("ItemCount", 1)

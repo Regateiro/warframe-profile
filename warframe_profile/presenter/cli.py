@@ -15,11 +15,9 @@ import argparse
 import os
 import sys
 
-from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import (
     ExportDB, fetch_de_profile, EQUIPMENT_SECTIONS, load_data,
-    InventoryFetchError, ProfileNotFoundError, WarframeNotRunningError,
-    build_mastered_set,
+    InventoryFetchError, ProfileNotFoundError, build_mastered_set,
 )
 from warframe_profile.model.analysis import (
     build_prime_map, analyze, build_relics_map, build_needed_drops,

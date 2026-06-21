@@ -17,8 +17,9 @@ from warframe_profile.model.inventory import (
 from warframe_profile.model.analysis import (
     build_prime_map, build_item_index, compute_sellable_equipment,
     build_regular_to_prime_map, find_owned_item_uns, find_owned_prime_uns,
-    find_excess_blueprints_and_components, normalize_path,
+    find_excess_blueprints_and_components,
 )
+from warframe_profile.model.utils import normalize_path
 from warframe_profile.view.report import (
     section_sellable_equipment, section_items_with_owned_prime,
     section_excess_blueprints_components,

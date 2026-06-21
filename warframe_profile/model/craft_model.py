@@ -11,7 +11,7 @@ import math
 import re
 from collections import defaultdict
 
-from warframe_profile.model.analysis import normalize_path
+from warframe_profile.model.utils import normalize_path
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +232,7 @@ def should_expand(
     return True
 
 
-def _display_name(
+def display_name(
     comp: dict,
     items_by_un: dict,
     parent_name: str | None,
@@ -289,13 +289,13 @@ def resolve_tree(
 
     item_name = (
         resolve_name(item.get("name", ""), loc_dict)
-        if item else _un_to_name(item_un)
+        if item else un_to_name(item_un)
     )
 
     if not components or depth >= max_depth:
-        name = item_name or _un_to_name(item_un)
+        name = item_name or un_to_name(item_un)
         if parent_name and ("blueprint" in name.lower()
-                            or _is_blueprint_un(item_un)):
+                            or is_blueprint_un(item_un)):
             name = f"{parent_name} Blueprint"
         return (
             {item_un_lower: {
@@ -320,7 +320,7 @@ def resolve_tree(
         owned_qty = owned.get(norm, 0)
         if owned_qty < quantity:
             craftables[item_un_lower] = {
-                "name": item_name or _un_to_name(item_un),
+                "name": item_name or un_to_name(item_un),
                 "quantity": quantity,
                 "owned": owned_qty,
                 "num_crafts": num_crafts,
@@ -333,7 +333,7 @@ def resolve_tree(
                 if bp_owned < 1:
                     bp_name = (
                         f"{item_name} Blueprint"
-                        if item_name else _un_to_name(recipe_key)
+                        if item_name else un_to_name(recipe_key)
                     )
                     result[recipe_key.lower()] = {
                         "name": bp_name,
@@ -360,7 +360,7 @@ def resolve_tree(
         comp_un = comp.get("uniqueName", "")
         comp_count = comp.get("itemCount", 1)
 
-        is_bp = "blueprint" in comp.get("name", "").lower() or _is_blueprint_un(comp_un)
+        is_bp = "blueprint" in comp.get("name", "").lower() or is_blueprint_un(comp_un)
         if is_bp and not consumable:
             total = comp_count
         else:
@@ -393,7 +393,7 @@ def resolve_tree(
             is_craftable = should_expand(
                 comp_un_lower, recipes_by_result, depth, max_depth, is_bp,
             )
-            name = _display_name(comp, items_by_un, item_name, loc_dict)
+            name = display_name(comp, items_by_un, item_name, loc_dict)
             if is_craftable:
                 if comp_un_lower in craftables:
                     craftables[comp_un_lower]["quantity"] += total
@@ -422,12 +422,12 @@ def resolve_tree(
 # Blueprint / name helpers
 # ---------------------------------------------------------------------------
 
-def _is_blueprint_un(un: str) -> bool:
+def is_blueprint_un(un: str) -> bool:
     """Check if a uniqueName represents a blueprint."""
     return "/Blueprint" in un or un.lower().endswith("blueprint")
 
 
-def _un_to_name(un: str) -> str:
+def un_to_name(un: str) -> str:
     """Convert a raw uniqueName to a rough display name."""
     name = un.split("/")[-1]
     name = name.replace("Component", "").replace("Blueprint", "")
@@ -438,17 +438,17 @@ def _un_to_name(un: str) -> str:
     return name.strip()
 
 
-def _weapon_name(un_lower: str, items_by_un: dict, loc_dict: dict) -> str:
+def weapon_name(un_lower: str, items_by_un: dict, loc_dict: dict) -> str:
     """Return the display name for a weapon uniqueName."""
     item = items_by_un.get(un_lower)
     if item:
         name = resolve_name(item.get("name", ""), loc_dict)
         if name:
             return name
-    return _un_to_name(un_lower)
+    return un_to_name(un_lower)
 
 
-def _merge_dicts(acc: dict, src: dict, *fields: str) -> None:
+def merge_dicts(acc: dict, src: dict, *fields: str) -> None:
     """Merge *src* into *acc*, summing the named *fields* for duplicate keys."""
     for k, v in src.items():
         if k in acc:
@@ -529,7 +529,7 @@ def decompose_raw_materials(
                 item = items_by_un.get(ing_lower, {})
                 ing_name = (
                     resolve_name(item.get("name", ""), loc_dict)
-                    if item else _un_to_name(ing_type)
+                    if item else un_to_name(ing_type)
                 )
                 requirements[ing_lower] = {
                     "name": ing_name,
@@ -547,7 +547,7 @@ def preserve_blueprints(
     """Carry over any blueprint entries from *all_requirements* not already
     covered by the raw-material decomposition."""
     for k, v in all_requirements.items():
-        if k not in new_requirements and _is_blueprint_un(k):
+        if k not in new_requirements and is_blueprint_un(k):
             new_requirements[k] = dict(v)
     return new_requirements
 
@@ -621,8 +621,8 @@ def build_weapon_chains(
             final_un, 1, items_by_un, owned,
             recipes_by_result, loc_dict, max_depth=max_depth,
         )
-        _merge_dicts(all_requirements, req, "quantity")
-        _merge_dicts(all_craftables, craft, "quantity")
+        merge_dicts(all_requirements, req, "quantity")
+        merge_dicts(all_craftables, craft, "quantity")
 
         recipe = recipes_by_result.get(final_un.lower())
         if recipe:
@@ -630,7 +630,7 @@ def build_weapon_chains(
             if bp_key:
                 bp_owned = owned.get(normalize_path(bp_key), 0)
                 if bp_owned < 1:
-                    names = [_weapon_name(u, items_by_un, loc_dict) for u in chain]
+                    names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
                     bp_name = f"{names[-1]} Blueprint"
                     key = bp_key.lower()
                     if key in all_requirements:

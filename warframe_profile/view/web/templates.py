@@ -4,10 +4,10 @@ import math
 from collections import defaultdict
 
 from warframe_profile.model.craft_model import (
-    resolve_name, has_recipe, _display_name, _is_blueprint_un,
-    _un_to_name, should_expand, get_recipe_components,
+    resolve_name, has_recipe, display_name, is_blueprint_un,
+    un_to_name, should_expand, get_recipe_components,
 )
-from warframe_profile.model.analysis import normalize_path
+from warframe_profile.model.utils import normalize_path
 
 
 GREEN = "#27ae60"
@@ -185,10 +185,10 @@ def _tree_html(
     components = recipe_components
 
     item_name = (
-        resolve_name(item.get("name", ""), loc_dict) if item else _un_to_name(item_un)
+        resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
     )
     if not item_name:
-        item_name = _un_to_name(item_un)
+        item_name = un_to_name(item_un)
 
     owned_qty = owned.get(normalize_path(item_un), 0)
     sat = owned_qty >= quantity
@@ -216,11 +216,11 @@ def _tree_html(
         comp_un_lower = comp_un.lower()
         comp_count = comp.get("itemCount", 1)
         comp_name = resolve_name(comp.get("name", ""), loc_dict)
-        is_bp = "blueprint" in comp_name.lower() or _is_blueprint_un(comp_un)
+        is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
         reusable = is_bp and not consumable
         label_mult = 1 if reusable else num_crafts * comp_count
 
-        comp_display = _display_name(comp, items_by_un, item_name, loc_dict)
+        comp_display = display_name(comp, items_by_un, item_name, loc_dict)
         label = f"{comp_display} x{label_mult}"
         if reusable:
             label += " (reusable)"
@@ -539,9 +539,9 @@ def render_weapon_chains(
         names = []
         item = items_by_un.get(final_un.lower())
         if item:
-            names.append(resolve_name(item.get("name", ""), loc_dict) or _un_to_name(final_un))
+            names.append(resolve_name(item.get("name", ""), loc_dict) or un_to_name(final_un))
         else:
-            names.append(_un_to_name(final_un))
+            names.append(un_to_name(final_un))
 
         parts.append(f"""<details>
 <summary>{' → '.join(names)}</summary>

@@ -10,18 +10,17 @@ import os
 import sys
 
 from warframe_profile import DATA_DIR
-from warframe_profile.model.analysis import normalize_path
+from warframe_profile.model.utils import normalize_path
 from warframe_profile.model.inventory import (
     ExportDB, build_owned, load_inventory_with_fallback,
 )
 from warframe_profile.model.craft_model import (
     build_items_by_un, build_recipes_by_result, build_lookup,
-    find_items, categorize, resolve_tree, build_weapon_chains, _merge_dicts,
-    _weapon_name,
+    find_items, categorize, resolve_tree, build_weapon_chains, merge_dicts,
+    weapon_name,
     compute_crafting_plan, decompose_raw_materials, preserve_blueprints,
 )
 from warframe_profile.view.report import (
-    GREEN, RED, YELLOW, RESET,
     print_craft_tree, print_craft_summary,
 )
 
@@ -73,7 +72,7 @@ def main(args) -> None:
             final_norm = normalize_path(final_un)
             if owned.get(final_norm, 0) > 0:
                 continue
-            names = [_weapon_name(u, items_by_un, loc_dict) for u in chain]
+            names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
             header = " \u2192 ".join(names)
             print(f"  {header}")
             print(f"  {'\u2550' * len(header)}")
@@ -181,8 +180,8 @@ def main(args) -> None:
                         "owned": bp_owned,
                     }
 
-        _merge_dicts(all_requirements, req, "quantity")
-        _merge_dicts(all_craftables, craft, "quantity")
+        merge_dicts(all_requirements, req, "quantity")
+        merge_dicts(all_craftables, craft, "quantity")
 
     compute_crafting_plan(all_craftables, owned)
     old_requirements = dict(all_requirements)
