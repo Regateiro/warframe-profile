@@ -34,6 +34,7 @@ DIM = "#7f8c8d"
 
 
 def _page_styles() -> str:
+    """Return the shared CSS stylesheet for all pages (GitHub-dark theme)."""
     return f"""<style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -84,11 +85,13 @@ def _page_styles() -> str:
 
 
 def _nav_link(key: str, label: str, url: str, active: str) -> str:
+    """Return a single nav link, marked active if *key* matches *active*."""
     active_cls = ' class="active"' if key == active else ""
     return f'<a href="{url}"{active_cls}>{label}</a>'
 
 
 def _refresh_form() -> str:
+    """Return the POST form that triggers an inventory refresh."""
     return (
         '<form method="post" action="/refresh" style="margin-left:auto">'
         '<button type="submit" style="padding:4px 12px;font-size:0.85rem">'
@@ -97,6 +100,7 @@ def _refresh_form() -> str:
 
 
 def _page(title: str, content: str, active: str) -> str:
+    """Wrap *content* in the full HTML page layout with nav, styles, and title."""
     tabs = [
         ("home", "Home", "/"),
         ("ducats", "Ducats", "/ducats"),
@@ -128,6 +132,7 @@ def _page(title: str, content: str, active: str) -> str:
 
 
 def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
+    """Render a horizontal subtab bar, marking the *active* tab."""
     def _link(key, label, url):
         active_cls = ' class="active"' if key == active else ""
         return f'<a href="{url}"{active_cls}>{label}</a>'
@@ -160,6 +165,7 @@ _CLEANUP_SUBTABS = [
 
 
 def render_home() -> str:
+    """Render the home page listing all available views."""
     return _page(
         "Home",
         """
@@ -186,6 +192,7 @@ def render_home() -> str:
 
 
 def _status_tag(owned: int, needed: int) -> str:
+    """Return an HTML span showing owned/partial/farm status for *owned*/*needed*."""
     if owned >= needed:
         return '<span class="tag tag-green">owned</span>'
     elif owned > 0:
@@ -194,6 +201,7 @@ def _status_tag(owned: int, needed: int) -> str:
 
 
 def _color(owned: int, needed: int) -> str:
+    """Return CSS colour name: green if satisfied, yellow if partial, red if missing."""
     if owned >= needed:
         return "green"
     elif owned > 0:
@@ -202,6 +210,7 @@ def _color(owned: int, needed: int) -> str:
 
 
 def _craft_color(owned: int, needed: int) -> str:
+    """Return CSS colour name for crafting tree nodes (green/yellow/red)."""
     if owned >= needed:
         return "green"
     elif owned > 0:
@@ -274,6 +283,7 @@ def _tree_html(
     max_depth: int = 2,
     parent_name: str | None = None,
 ) -> str:
+    """Build recursive HTML crafting tree for *item_un* up to *max_depth*."""
     lines: list[str] = []
     item_un_lower = item_un.lower()
     item = items_by_un.get(item_un_lower)
@@ -325,6 +335,7 @@ def _tree_html(
 
 
 def _craft_summary_html(requirements: dict, craftables: dict) -> str:
+    """Render aggregated crafting list, raw materials, and farming tables."""
     parts = []
 
     craft_list = sorted(craftables.values(), key=lambda x: x["name"])
@@ -390,6 +401,7 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 
 
 def render_ducats_missing(data) -> str:
+    """Render the Ducats — Missing sub-view (unowned Prime items + summary)."""
     items = data.items
     missing = data.missing
     total_safe = data.total_ducats_safe
@@ -424,6 +436,7 @@ def render_ducats_missing(data) -> str:
 
 
 def render_ducats_excess(data) -> str:
+    """Render the Ducats — Excess sub-view (missing and surplus prime parts)."""
     items = data.items
     parts = []
 
@@ -444,6 +457,7 @@ def render_ducats_excess(data) -> str:
 
 
 def render_ducats_sell(data) -> str:
+    """Render the Ducats — Sell sub-view (surplus parts with ducat values)."""
     items = data.items
     total_safe = data.total_ducats_safe
     parts = []
@@ -474,6 +488,7 @@ def render_ducats_sell(data) -> str:
 
 
 def _item_row(i) -> str:
+    """Return one HTML table row for a prime item's excess/missing breakdown."""
     missing_parts = [p for p in i.parts if p.missing > 0]
     missing_str = ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "—"
     surplus_parts = [p for p in i.parts if p.surplus > 0]
@@ -498,6 +513,7 @@ def _item_row(i) -> str:
 
 
 def render_relics_needed(needed, relics) -> str:
+    """Render the Relics — Needed Drops sub-view (missing parts + relic drops)."""
     parts = []
 
     if needed:
@@ -520,6 +536,7 @@ def render_relics_needed(needed, relics) -> str:
 
 
 def render_relics_safe(needed, relics) -> str:
+    """Render the Relics — Safe-to-Spam sub-view (relics safe to crack)."""
     parts = []
 
     safe = [r for r in relics if r.safe and r.count > 0]
@@ -548,6 +565,7 @@ def render_relics_safe(needed, relics) -> str:
 
 
 def render_craft(items_by_un, recipes_by_result, owned, loc_dict) -> str:
+    """Render the Craft tab with search form and no results yet."""
     content = """
 <div class="tab-bar">
   <a href="/craft" class="active">Item Lookup</a>
@@ -570,6 +588,7 @@ def render_craft_result(
     loc_dict,
     depth: int = 3,
 ) -> str:
+    """Render search results as expandable crafting trees with summaries."""
     lines = []
     for m in matches:
         un = m.get("uniqueName", "")
@@ -629,6 +648,7 @@ def render_weapon_chains(
     owned,
     loc_dict,
 ) -> str:
+    """Render the Weapon Chains tab (unowned upgrade chains with crafting trees)."""
     parts = []
     if shown == 0:
         return _page(
@@ -692,6 +712,7 @@ def render_weapon_chains(
 
 
 def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> str:
+    """Render Cleanup — Re-Buyable sub-view (market-rebuyable equipment safe to sell)."""
     parts = []
 
     if sellable:
@@ -714,6 +735,7 @@ def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> 
 
 
 def render_cleanup_sell(sellable, owned_prime_pairs, items_by_un, loc_dict) -> str:
+    """Render Cleanup — Prime Variant sub-view (non-Prime items with owned Prime)."""
     parts = []
 
     if owned_prime_pairs:
@@ -733,6 +755,7 @@ def render_cleanup_sell(sellable, owned_prime_pairs, items_by_un, loc_dict) -> s
 
 
 def render_cleanup_excess(excess_items) -> str:
+    """Render Cleanup — Excess sub-view (blueprints/components with all paths covered)."""
     parts = []
 
     if excess_items:

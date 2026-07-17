@@ -207,9 +207,11 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler — routes paths to handler methods."""
 
     def log_message(self, fmt, *args):
+        """Log one request line to stderr in a compact format."""
         sys.stderr.write(f"[web] {args[0]} {args[1]} {args[2]}\n")
 
     def _html(self, code: int, html: str):
+        """Send an HTML response with *code* and *html* body."""
         body = html.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -218,14 +220,17 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _redirect(self, path: str):
+        """Send a 302 redirect to *path*."""
         self.send_response(302)
         self.send_header("Location", path)
         self.end_headers()
 
     def _handle_home(self):
+        """Serve the home page."""
         self._html(200, render_home())
 
     def _handle_ducats(self, subpath: str):
+        """Serve ducat analysis sub-views (missing / excess / sell)."""
         _ensure_analysis()
         if subpath == "/excess":
             self._html(200, render_ducats_excess(_cache.analysis_result))
@@ -235,6 +240,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             self._html(200, render_ducats_missing(_cache.analysis_result))
 
     def _handle_relics(self, subpath: str):
+        """Serve relic analysis sub-views (needed drops / safe-to-spam)."""
         _ensure_relics()
         if subpath == "/safe":
             self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
@@ -242,6 +248,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             self._html(200, render_relics_needed(_cache.needed_drops, _cache.relic_info))
 
     def _handle_craft(self, query: str):
+        """Serve craft search results or the empty search form."""
         if not query:
             self._html(
                 200,
@@ -286,6 +293,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             )
 
     def _handle_weapon_chains(self):
+        """Serve the weapon upgrade chains view."""
         chains, req, craft, shown = build_weapon_chains(
             _cache.items_by_un,
             _cache.recipes_by_result,
@@ -307,6 +315,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _handle_cleanup(self, subpath: str):
+        """Serve cleanup sub-views (rebuy / sell / excess)."""
         if subpath == "/sell":
             _ensure_analysis()
             self._html(
@@ -397,6 +406,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main(args) -> None:
+    """Entry point for the ``--serve`` sub-command."""
     items_cache = getattr(args, "items_cache", "") or os.path.join(DATA_DIR, "export_db.json")
     inv_path = getattr(args, "inventory", "") or os.path.join(DATA_DIR, "inventory.json")
     refresh = getattr(args, "refresh", False)
