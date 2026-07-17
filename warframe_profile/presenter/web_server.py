@@ -131,6 +131,7 @@ def _ensure_analysis():
         _cache.inventory,
         _cache.prime_map,
         EQUIPMENT_SECTIONS,
+        recipes=_cache.db.recipes,
     )
     _cache.sellable = compute_sellable_equipment(
         _cache.db,
@@ -145,7 +146,7 @@ def _ensure_analysis():
     for reg_un in owned_regular:
         pi = reg_to_prime.get(reg_un)
         if pi and pi["prime_un"] in owned_primes:
-            item = _cache.items_by_un.get(reg_un, {})
+            item = _cache.items_by_un.get(normalize_path(reg_un), {})
             _cache.owned_prime_pairs.append(
                 (
                     item.get("name", reg_un),

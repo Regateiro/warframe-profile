@@ -70,14 +70,14 @@ def _run(
         name = profile.get("DisplayName", "").rstrip(chr(0))
         mr = profile.get("PlayerLevel", "?")
         print(f"  Player: {name}  MR {mr}", file=sys.stderr)
-    except (ProfileNotFoundError, InventoryFetchError) as e:
-        print(f"  Warning: {e}", file=sys.stderr)
+    except (ProfileNotFoundError, InventoryFetchError):
+        pass
 
     # Build mastered set (items ever ranked up, even if sold).
     mastered = build_mastered_set(inv)
 
     # Run core analysis.
-    data = analyze(inv, prime_map, EQUIPMENT_SECTIONS, mastered=mastered)
+    data = analyze(inv, prime_map, EQUIPMENT_SECTIONS, mastered=mastered, recipes=db.recipes)
 
     # Compute sellable equipment index.
     data.sellable = compute_sellable_equipment(
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     import argparse
     import os
 
-    from warframe_profile import DATA_DIR
+    from warframe_profile import DATA_DIR, DEFAULT_ACCOUNT_ID
 
     _parser = argparse.ArgumentParser(description="Warframe Prime Part Analyzer")
     _parser.add_argument("--inventory", "-i", help="Path to cached inventory.json")
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     _parser.add_argument(
         "--profile",
         "-p",
-        default="57c71e613ade7fa2a211997b",
+        default=DEFAULT_ACCOUNT_ID,
         help="DE account ID for player display",
     )
     _parser.add_argument(

@@ -18,9 +18,54 @@ Flow:
 
 from prettytable import PrettyTable, TableStyle
 
+from warframe_profile.model.craft_model import build_recipes_by_result
 from warframe_profile.model.inventory import (
     ExportDB,
+    build_owned,
     load_data,
+)
+from warframe_profile.model.utils import normalize_path
+
+# ---------------------------------------------------------------------------
+# Category sets used by tier filters and MR calculations
+# ---------------------------------------------------------------------------
+
+#: Categories whose items are quick to acquire (Tier 1).
+_EASY_CATEGORIES: frozenset[str] = frozenset({"Sentinels", "Pets", "Misc"})
+
+#: Categories for Archwing items (Tier 2).
+_ARCHWING_CATEGORIES: frozenset[str] = frozenset({"Archwing", "Arch-Melee"})
+
+#: Categories for warframe-like items that contribute 6,000 MR.
+_FRAME_LIKE_CATEGORIES: frozenset[str] = frozenset({
+    "Warframes", "Archwing", "Sentinels", "Pets",
+})
+
+#: Categories for prime weapons (Tier 5).
+_PRIME_WEAPON_CATEGORIES: frozenset[str] = frozenset({"Primary", "Secondary", "Melee"})
+
+#: Categories for market-buyable weapons.
+_MARKET_WEAPON_CATEGORIES: frozenset[str] = frozenset({
+    "Primary", "Secondary", "Melee", "Arch-Gun",
+})
+
+#: Inventory sections that can contain modular or pet items (for gilding checks).
+_MODULAR_SECTIONS: tuple[str, ...] = (
+    "OperatorAmps",
+    "Primary",
+    "Secondary",
+    "Melee",
+    "MoaPets",
+    "KubrowPets",
+)
+
+#: Path prefixes that identify resource/material ingredients (skipped in
+#: blueprint-readiness checks).
+_RESOURCE_PATH_PREFIXES: tuple[str, ...] = (
+    "/Lotus/Types/Items/",
+    "/Lotus/Types/Gameplay/",
+    "/Lotus/Types/Game/",
+    "/Lotus/Types/Keys/",
 )
 
 # ---------------------------------------------------------------------------
@@ -34,7 +79,7 @@ TIERS = [
         "desc": "Quick wins: buy blueprints from Market or Fortuna, easy materials",
         "filter": lambda i: (
             not i.get("isPrime")
-            and (i.get("category") in ("Sentinels", "Pets") or i.get("category") == "Misc")
+            and i.get("category", "") in _EASY_CATEGORIES
         ),
     },
     {
@@ -42,7 +87,7 @@ TIERS = [
         "label": "Tier 2 — Archwing & Arch-Melee",
         "desc": "Clan research / Archwing missions / Cephalon Simaris",
         "filter": lambda i: (
-            not i.get("isPrime") and i.get("category") in ("Archwing", "Arch-Melee")
+            not i.get("isPrime") and i.get("category", "") in _ARCHWING_CATEGORIES
         ),
     },
     {
@@ -66,7 +111,7 @@ TIERS = [
         "label": "Tier 5 — Prime Weapons (Relics)",
         "desc": "Farm relics / radshares; RNG-dependent",
         "filter": lambda i: (
-            i.get("isPrime") and i.get("category") in ("Primary", "Secondary", "Melee")
+            i.get("isPrime") and i.get("category", "") in _PRIME_WEAPON_CATEGORIES
         ),
     },
     {
@@ -94,13 +139,21 @@ def _has_tag(item: dict, tag: str) -> bool:
     return any(tag in str(t) for t in tags)
 
 
+#: uniqueName substring that identifies Paracesis — the only non-lich weapon
+#: that also ranks to 40 (uses the same XP curve as Kuva/Tenet/Coda weapons).
+_PARACESIS_UN = "BallasSword"
+
+#: Name prefixes for Kuva / Tenet / Coda / Dual Coda lich weapons (rank 40).
+_LICH_WEAPON_PREFIXES = ("Kuva ", "Tenet ", "Coda ", "Dual Coda ")
+
+
 def _is_lich_item(item: dict) -> bool:
     """Return True if this is a Kuva / Tenet / Coda / Paracesis weapon (rank 40)."""
     name = item.get("name", "")
-    if any(name.startswith(p) for p in ("Kuva ", "Tenet ", "Coda ", "Dual Coda ")):
+    if any(name.startswith(p) for p in _LICH_WEAPON_PREFIXES):
         return True
     un = item.get("uniqueName", "")
-    return "BallasSword" in un
+    return _PARACESIS_UN in un
 
 
 def _is_necramech(item: dict) -> bool:
@@ -119,7 +172,7 @@ def _item_mr(item: dict) -> int:
     if _is_necramech(item):
         return 8_000
     cat = item.get("category", "")
-    if cat in ("Warframes", "Archwing", "Sentinels", "Pets"):
+    if cat in _FRAME_LIKE_CATEGORIES:
         return 6_000
     if _is_lich_item(item):
         return 4_000
@@ -134,14 +187,77 @@ def _tier_index(item: dict) -> int:
     return len(TIERS) - 1
 
 
+#: Tag → source label mapping.  Checked in order; first match wins.
+_TAG_SOURCE_MAP: list[tuple[str, str]] = [
+    ("Technocyte Coda", "Coda"),
+    ("Kuva Lich", "Lich"),
+    ("Tenet", "Sister"),
+    ("Invasion Reward", "Invasion"),
+    ("Stalker", "Stalker"),
+    ("Cephalon Simaris", "Simaris"),
+    ("Baro", "Baro Ki'teer"),
+    ("Dax", "Duviri Circuit"),
+    ("Duviri", "Duviri Circuit"),
+    ("Zariman", "Zariman (Holdfasts)"),
+    ("Entrati", "Deimos (Entrati)"),
+]
+
+#: Syndicate names that appear as tags.
+_SYNDICATE_TAGS: list[str] = [
+    "Steel Meridian",
+    "Red Veil",
+    "Perrin Sequence",
+    "New Loka",
+    "Cephalon Suda",
+    "Arbiters of Hexis",
+]
+
+#: uniqueName path substring → source label mapping.
+_UN_SOURCE_MAP: list[tuple[str, str]] = [
+    ("ClanTech", "Dojo Research"),
+    ("MK1Series", "Market (Credits)"),
+    ("/Ostron/", "Cetus (Ostron)"),
+    ("/SolarisUnited/", "Fortuna (Solaris)"),
+    ("ThanoTech", "Deimos (Entrati)"),
+    ("Thanotech", "Deimos (Entrati)"),
+    ("/VoidTrader/", "Baro Ki'teer"),
+    ("/Archon/", "Archon Hunt"),
+    ("/Lasria/", "1999"),
+    ("/Conclave/", "Conclave"),
+    ("/Vehicles/Hoverboard", "Fortuna (Ventkids)"),
+    ("/Sentinels/SentinelWeapons", "Market"),
+    ("StalkerTwo", "Stalker"),
+]
+
+#: Item name → source label mapping (exact matches).
+_NAME_SOURCE_MAP: dict[str, str] = {
+    "Excalibur Umbra": "Quest (The Second Dream)",
+    "Wolf Sledge": "Nightwave",
+}
+
+#: Item names that are daily tribute rewards.
+_DAILY_TRIBUTE_NAMES: frozenset[str] = frozenset({
+    "Azima", "Zenistar", "Zenith", "Sigma & Octantis",
+})
+
+#: Item names that are quest rewards.
+_QUEST_REWARD_NAMES: frozenset[str] = frozenset({
+    "Broken War", "Broken Scepter", "Skiajati", "Paracesis",
+    "Nataruk", "Sirocco", "Xoris", "Orvius", "Shedu",
+})
+
+#: Deimos bounty reward names.
+_DEIMOS_BOUNTY_NAMES: frozenset[str] = frozenset({
+    "Arum Spinosa", "Bubonico", "Catabolyst", "Corthe", "Keratinos",
+    "Pulmonars", "Quassus", "Sporothrix",
+})
+
+
 def _source_by_tags(item: dict, tags: set[str]) -> str | None:
     """Determine source from tag checks (Lich, Invasion, Syndicate, etc.)."""
-    if "Technocyte Coda" in tags:
-        return "Coda"
-    if "Kuva Lich" in tags:
-        return "Lich"
-    if "Tenet" in tags:
-        return "Sister"
+    for tag, source in _TAG_SOURCE_MAP:
+        if tag in tags:
+            return source
     if _is_lich_item(item):
         name_prefix = item.get("name", "").split(" ")[0]
         if name_prefix in ("Kuva",):
@@ -150,28 +266,7 @@ def _source_by_tags(item: dict, tags: set[str]) -> str | None:
             return "Sister"
         if name_prefix in ("Coda",) or item.get("name", "").startswith("Dual Coda"):
             return "Coda"
-    if "Invasion Reward" in tags:
-        return "Invasion"
-    if "Stalker" in tags:
-        return "Stalker"
-    if "Cephalon Simaris" in tags:
-        return "Simaris"
-    if "Baro" in tags:
-        return "Baro Ki'teer"
-    if "Dax" in tags or "Duviri" in tags:
-        return "Duviri Circuit"
-    if "Zariman" in tags:
-        return "Zariman (Holdfasts)"
-    if "Entrati" in tags:
-        return "Deimos (Entrati)"
-    for synd in (
-        "Steel Meridian",
-        "Red Veil",
-        "Perrin Sequence",
-        "New Loka",
-        "Cephalon Suda",
-        "Arbiters of Hexis",
-    ):
+    for synd in _SYNDICATE_TAGS:
         if synd in tags:
             return f"Syndicate ({synd})"
     return None
@@ -179,28 +274,9 @@ def _source_by_tags(item: dict, tags: set[str]) -> str | None:
 
 def _source_by_unique_name(un: str) -> str | None:
     """Determine source from *uniqueName* path patterns."""
-    if "ClanTech" in un:
-        return "Dojo Research"
-    if "MK1Series" in un:
-        return "Market (Credits)"
-    if "/Ostron/" in un:
-        return "Cetus (Ostron)"
-    if "/SolarisUnited/" in un:
-        return "Fortuna (Solaris)"
-    if "ThanoTech" in un or "Thanotech" in un:
-        return "Deimos (Entrati)"
-    if "/VoidTrader/" in un:
-        return "Baro Ki'teer"
-    if "/Archon/" in un:
-        return "Archon Hunt"
-    if "/Lasria/" in un:
-        return "1999"
-    if "/Conclave/" in un:
-        return "Conclave"
-    if "/Vehicles/Hoverboard" in un:
-        return "Fortuna (Ventkids)"
-    if "/Sentinels/SentinelWeapons" in un:
-        return "Market"
+    for pattern, source in _UN_SOURCE_MAP:
+        if pattern in un:
+            return source
     if "/MoaPets/" in un and "Weapon" in un:
         return "Fortuna (Solaris)"
     if "OperatorAmplifiers" in un and "Barrel" in un:
@@ -216,24 +292,14 @@ def _source_by_name(name: str) -> str | None:
         return "Market (Credits)"
     if name.startswith("Prisma "):
         return "Baro Ki'teer"
-    if name == "Excalibur Umbra":
-        return "Quest (The Second Dream)"
-    if name in ("Azima", "Zenistar", "Zenith", "Sigma & Octantis"):
+    if name in _NAME_SOURCE_MAP:
+        return _NAME_SOURCE_MAP[name]
+    if name in _DAILY_TRIBUTE_NAMES:
         return "Daily Tribute"
-    if name in (
-        "Broken War",
-        "Broken Scepter",
-        "Skiajati",
-        "Paracesis",
-        "Nataruk",
-        "Sirocco",
-        "Xoris",
-        "Orvius",
-        "Shedu",
-    ):
+    if name in _QUEST_REWARD_NAMES:
         return "Quest"
-    if name == "Wolf Sledge":
-        return "Nightwave"
+    if name in _DEIMOS_BOUNTY_NAMES:
+        return "Deimos (Entrati)"
     return None
 
 
@@ -244,11 +310,11 @@ def _source_by_category(item: dict) -> str:
     cat = item.get("category", "")
     if cat in ("Sentinels", "Pets"):
         return "Market"
-    if cat in ("Archwing", "Arch-Melee"):
+    if cat in _ARCHWING_CATEGORIES:
         return "Dojo Research"
     if cat == "Warframes":
         return "Market"
-    if cat in ("Primary", "Secondary", "Melee", "Arch-Gun"):
+    if cat in _MARKET_WEAPON_CATEGORIES:
         return "Market"
     return "Various"
 
@@ -293,7 +359,7 @@ def _max_xp_for_item(item: dict) -> int:
     if _is_necramech(item):
         return 1_600_000
     cat = item.get("category", "")
-    if cat in ("Warframes", "Archwing", "Sentinels", "Pets"):
+    if cat in _FRAME_LIKE_CATEGORIES:
         return 900_000
     if _is_lich_item(item):
         return 800_000
@@ -344,14 +410,7 @@ def _modular_features(inv: dict, component_path: str) -> int | None:
     """
     needle = component_path.lower()
 
-    for sec in (
-        "OperatorAmps",
-        "Primary",
-        "Secondary",
-        "Melee",
-        "MoaPets",
-        "KubrowPets",
-    ):
+    for sec in _MODULAR_SECTIONS:
         for item in inv.get(sec) or []:
             if not isinstance(item, dict):
                 continue
@@ -456,13 +515,54 @@ def _classify_mastery_item(
     return "in_progress", _tier_index(item)
 
 
+def _has_blueprint(
+    item: dict,
+    owned: dict,
+    recipes_by_result: dict,
+) -> bool:
+    """Return True if the player owns all required blueprints for *item*.
+
+    Checks the main blueprint and, for each ingredient in the recipe,
+    verifies that any non-material component (not under ``/Lotus/Types/Items/``)
+    is present in the player's inventory in sufficient quantity.
+    """
+    un = item.get("uniqueName", "").lower()
+    recipe = recipes_by_result.get(un)
+    if not recipe:
+        return False
+    bp_key = recipe.get("_recipeKey", "")
+    if not bp_key:
+        return False
+    if owned.get(normalize_path(bp_key), 0) <= 0:
+        return False
+
+    for ing in recipe.get("ingredients") or []:
+        ing_type = ing.get("ItemType", "")
+        ing_count = ing.get("ItemCount", 1)
+        # Skip resources/materials — user is OK farming those
+        if ing_type.startswith(_RESOURCE_PATH_PREFIXES):
+            continue
+        if owned.get(normalize_path(ing_type), 0) < ing_count:
+            return False
+    return True
+
+
 def analyze_mastery(
     db: ExportDB,
     inv: dict,
-) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]]]:
-    """Cross-reference player progress against the masterable item list."""
+) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]], list[tuple[dict, int]]]:
+    """Cross-reference player progress against the masterable item list.
+
+    Returns:
+        ``(total, mastered, unmastered, in_progress, blueprint_ready)``
+        where *blueprint_ready* is the subset of *unmastered* items whose
+        blueprint is already owned.
+    """
     ever_leveled = _build_ever_leveled(inv)
     masterable = _filter_masterable_items(db)
+
+    owned = build_owned(inv, db.recipes)
+    recipes_by_result = build_recipes_by_result(db.raw)
 
     mastered = 0
     unmastered: list[tuple[dict, int]] = []
@@ -477,10 +577,19 @@ def analyze_mastery(
         else:
             mastered += 1
 
-    unmastered.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
-    in_progress.sort(key=lambda pair: (pair[1], pair[0].get("name", "")))
+    blueprints_ready: list[tuple[dict, int]] = []
+    no_blueprint: list[tuple[dict, int]] = []
+    for pair in unmastered:
+        if _has_blueprint(pair[0], owned, recipes_by_result):
+            blueprints_ready.append(pair)
+        else:
+            no_blueprint.append(pair)
 
-    return len(masterable), mastered, unmastered, in_progress
+    blueprints_ready.sort(key=lambda pair: pair[0].get("name") or "")
+    no_blueprint.sort(key=lambda pair: (pair[1], pair[0].get("name") or ""))
+    in_progress.sort(key=lambda pair: (pair[1], pair[0].get("name") or ""))
+
+    return len(masterable), mastered, no_blueprint, in_progress, blueprints_ready
 
 
 # ---------------------------------------------------------------------------
@@ -488,15 +597,68 @@ def analyze_mastery(
 # ---------------------------------------------------------------------------
 
 
+def _item_name(item: dict) -> str:
+    """Return a display name for *item* with fallbacks."""
+    name = item.get("name") or ""
+    if name:
+        return name
+    un = item.get("uniqueName", "")
+    if un:
+        return un.split("/")[-1]
+    return "?"
+
+
+def _print_section_table(items: list[dict]) -> None:
+    """Print a flat table for the given list of items."""
+    t = PrettyTable()
+    t.set_style(TableStyle.DEFAULT)
+    t.field_names = ["Item", "Category", "MR", "Source"]
+    t.align["Item"] = "l"
+    t.align["Category"] = "l"
+    t.align["MR"] = "r"
+    t.align["Source"] = "l"
+
+    for item in items:
+        t.add_row([
+            _item_name(item),
+            item.get("category", ""),
+            _item_mr(item),
+            _item_source(item),
+        ])
+
+    print(t)
+    print()
+
+
 def _print_mastery_section(
     header: str,
     desc: str,
     items: list[tuple[dict, int]],
     show_detail: bool = True,
+    group_by_tier: bool = True,
 ) -> None:
-    """Print one mastery section (never-touched or in-progress) grouped by tier."""
+    """Print one mastery section.
+
+    When *group_by_tier* is True (default) items are grouped by difficulty
+    tier with separate tables.  When False, all items are printed in one
+    flat table.
+    """
     if not items:
         return
+    size = len(items)
+    mr = sum(_item_mr(i) for i, _ in items)
+
+    print(f"{'─' * 68}")
+    print(f"  {header}")
+    if show_detail:
+        print(f"  {desc}")
+    print(f"  {size} item{'s' if size != 1 else ''}  ~{mr:,} MR")
+    print()
+
+    if not group_by_tier:
+        _print_section_table([it for it, _ in items])
+        return
+
     tier_groups: list[list[dict]] = [[] for _ in TIERS]
     for item, t_idx in items:
         tier_groups[t_idx].append(item)
@@ -507,30 +669,13 @@ def _print_mastery_section(
         count = len(group)
         mr = sum(_item_mr(i) for i in group)
         print(f"{'─' * 68}")
-        label = f"{header} — {tier['label']}" if show_detail else header
+        label = f"{header} — {tier['label']}"
         print(f"  {label}")
-        if show_detail:
-            print(f"  {tier['desc']}")
+        print(f"  {tier['desc']}")
         print(f"  {count} items  ~{mr:,} MR")
         print()
 
-        t = PrettyTable()
-        t.set_style(TableStyle.DEFAULT)
-        t.field_names = ["Item", "Category", "MR", "Source"]
-        t.align["Item"] = "l"
-        t.align["Category"] = "l"
-        t.align["MR"] = "r"
-        t.align["Source"] = "l"
-
-        for item in group:
-            name = item.get("name", item.get("uniqueName", "?"))
-            cat = item.get("category", "")
-            mr_val = _item_mr(item)
-            src = _item_source(item)
-            t.add_row([name, cat, mr_val, src])
-
-        print(t)
-        print()
+        _print_section_table(group)
 
 
 def print_report(
@@ -538,25 +683,32 @@ def print_report(
     mastered: int,
     unmastered: list[tuple[dict, int]],
     in_progress: list[tuple[dict, int]],
+    blueprints_ready: list[tuple[dict, int]] | None = None,
 ) -> None:
     """Print the full mastery progression report."""
-    remaining = len(unmastered) + len(in_progress)
+    br = blueprints_ready or []
+    remaining = len(unmastered) + len(in_progress) + len(br)
 
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
     print("=" * 68)
     print(f"  {mastered} / {total} masterable items mastered ({mastered * 100 // total}%)")
     print(
+        f"  {len(br)} blueprints ready"
         f"  {len(unmastered)} items never touched"
         f"  {len(in_progress)} in progress"
         f"  {remaining} remaining"
     )
     total_mr = sum(_item_mr(item) for item, _ in unmastered) + sum(
         _item_mr(item) for item, _ in in_progress
-    )
+    ) + sum(_item_mr(item) for item, _ in br)
     print(f"  ~{total_mr:,} MR available from unmastered items")
     print()
 
+    _print_mastery_section(
+        "BLUEPRINT READY", "Blueprint owned \u2014 farm materials to build", br,
+        group_by_tier=False,
+    )
     _print_mastery_section("NEVER TOUCHED", "No XP recorded", unmastered)
     _print_mastery_section("IN PROGRESS", "Partial XP, not yet max rank", in_progress)
 
@@ -579,5 +731,5 @@ def main(args) -> None:
         args.refresh,
     )
 
-    total, mastered, unmastered, in_progress = analyze_mastery(db, inv)
-    print_report(total, mastered, unmastered, in_progress)
+    total, mastered, unmastered, in_progress, blueprints_ready = analyze_mastery(db, inv)
+    print_report(total, mastered, unmastered, in_progress, blueprints_ready)

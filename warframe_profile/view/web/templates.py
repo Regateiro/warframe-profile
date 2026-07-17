@@ -34,10 +34,6 @@ DIM = "#7f8c8d"
 
 
 def _page_styles() -> str:
-    green = "#27ae60"
-    red = "#e74c3c"
-    yellow = "#f1c40f"
-    dim = "#7f8c8d"
     return f"""<style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -59,8 +55,8 @@ def _page_styles() -> str:
   tbody tr:nth-child(even) {{ background: #111920; }}
   tbody tr:hover {{ background: #161b22; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  .green {{ color: {green}; }} .red {{ color: {red}; }} .yellow {{ color: {yellow}; }}
-  .dim {{ color: {dim}; }}
+  .green {{ color: {GREEN}; }} .red {{ color: {RED}; }} .yellow {{ color: {YELLOW}; }}
+  .dim {{ color: {DIM}; }}
   summary {{ cursor: pointer; padding: 4px 0; font-weight: 600; color: #58a6ff; }}
   details {{ margin: 4px 0; }}
   details[open] > summary {{ margin-bottom: 6px; }}
@@ -68,9 +64,9 @@ def _page_styles() -> str:
   .tree-item {{ padding: 2px 0; }}
   .tag {{ display: inline-block; padding: 1px 6px; border-radius: 3px;
           font-size: 0.75rem; font-weight: 600; }}
-  .tag-green {{ background: {green}22; color: {green}; }}
-  .tag-red {{ background: {red}22; color: {red}; }}
-  .tag-yellow {{ background: {yellow}22; color: {yellow}; }}
+  .tag-green {{ background: {GREEN}22; color: {GREEN}; }}
+  .tag-red {{ background: {RED}22; color: {RED}; }}
+  .tag-yellow {{ background: {YELLOW}22; color: {YELLOW}; }}
   .tab-bar {{ display: flex; gap: 6px; margin-bottom: 16px; }}
   .tab-bar a {{ padding: 4px 12px; border-radius: 4px; text-decoration: none;
                background: #161b22; color: #8b949e; font-size: 0.85rem; }}
@@ -81,7 +77,7 @@ def _page_styles() -> str:
   button:hover {{ background: #1f6feb; }}
   .flash {{ padding: 10px 14px; border-radius: 6px; margin: 12px 0;
            background: #1f6feb22; border: 1px solid #1f6feb; color: #58a6ff; }}
-  .flash-error {{ background: {red}22; border-color: {red}; color: {red}; }}
+  .flash-error {{ background: {RED}22; border-color: {RED}; color: {RED}; }}
   @media (max-width: 600px) {{ table {{ font-size: 0.75rem; }}
     th, td {{ padding: 4px 6px; }} }}
 </style>"""

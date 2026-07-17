@@ -313,7 +313,7 @@ def section_items_with_owned_prime(
         if not prime_info:
             continue
         if prime_info["prime_un"] in owned_primes:
-            item = items_by_un.get(reg_un, {})
+            item = items_by_un.get(normalize_path(reg_un), {})
             rows.append(
                 {
                     "name": item.get("name", reg_un),

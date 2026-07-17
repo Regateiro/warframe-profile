@@ -48,16 +48,9 @@ def build_items_by_un(db: dict) -> dict:
     The key is lowercased uniqueName for case-insensitive lookups.
     """
     items: dict = {}
-    source_labels = [
-        "warframes",
-        "weapons",
-        "resources",
-        "customs",
-        "gear",
-        "sentinels",
-        "keys",
-    ]
-    for label in source_labels:
+    from warframe_profile.scripts.update_export_db import DE_ITEM_LABELS
+
+    for label in DE_ITEM_LABELS:
         for un, val in db.get(label, {}).items():
             val["uniqueName"] = un
             val["_source"] = label
@@ -132,6 +125,15 @@ _CATEGORY_BY_PC = {
     "MiscItems": "Resources",
 }
 
+#: Fallback category labels when ``productCategory`` is unavailable,
+#: keyed by the ``_source`` label assigned during import.
+_SOURCE_CATEGORY_FALLBACK: dict[str, str] = {
+    "resources": "Resources",
+    "keys": "Keys",
+    "gear": "Gear",
+    "customs": "Cosmetic",
+}
+
 
 def categorize(item: dict) -> str:
     """Return a human-readable category for *item*.
@@ -142,15 +144,7 @@ def categorize(item: dict) -> str:
     if pc:
         return _CATEGORY_BY_PC.get(pc, pc)
     source = item.get("_source", "")
-    if source == "resources":
-        return "Resources"
-    if source == "keys":
-        return "Keys"
-    if source == "gear":
-        return "Gear"
-    if source == "customs":
-        return "Cosmetic"
-    return "Misc"
+    return _SOURCE_CATEGORY_FALLBACK.get(source, "Misc")
 
 
 # ---------------------------------------------------------------------------
@@ -803,13 +797,14 @@ def build_weapon_chains(
     recipes_by_result: dict,
     owned: dict,
     loc_dict: dict,
+    mastered: set[str] | None = None,
     max_depth: int = 5,
 ) -> tuple[list[list[str]], dict, dict, int]:
     """Build weapon upgrade chains whose final weapon is not yet owned."""
-    _weapon_cats = {"Primary", "Secondary", "Melee"}
+    from warframe_profile.model.analysis import WEAPON_CATEGORIES
 
     weapon_uns = {
-        un_lower for un_lower, item in items_by_un.items() if categorize(item) in _weapon_cats
+        un_lower for un_lower, item in items_by_un.items() if categorize(item) in WEAPON_CATEGORIES
     }  # noqa: E501
 
     builds_into, built_from = _build_weapon_graph(items_by_un, recipes_by_result, weapon_uns)
@@ -820,6 +815,12 @@ def build_weapon_chains(
     shown = 0
 
     for chain in chains:
+        final_un = chain[-1]
+        final_norm = normalize_path(final_un)
+        if owned.get(final_norm, 0) > 0:
+            continue
+        if mastered and final_norm in mastered:
+            continue
         _aggregate_chain_requirements(
             chain,
             items_by_un,

@@ -19,6 +19,7 @@ from warframe_profile.model.craft_model import (
     compute_crafting_plan,
     decompose_raw_materials,
     find_items,
+    is_blueprint_un,
     merge_dicts,
     preserve_blueprints,
     resolve_tree,
@@ -26,6 +27,7 @@ from warframe_profile.model.craft_model import (
 )
 from warframe_profile.model.inventory import (
     ExportDB,
+    build_mastered_set,
     build_owned,
     load_inventory_with_fallback,
 )
@@ -55,8 +57,8 @@ def _load_export_db(items_cache: str) -> tuple:
     return loc_dict, raw, items_by_un, recipes_by_result, by_name
 
 
-def _load_inventory(inv_path: str, refresh: bool, raw: dict) -> tuple[dict, str]:
-    """Load inventory and return ``(owned, inv_path)``."""
+def _load_inventory(inv_path: str, refresh: bool, raw: dict) -> tuple[dict, dict]:
+    """Load inventory and return ``(owned, inv)``."""
     try:
         inv, _account_id = load_inventory_with_fallback(inv_path, refresh=refresh)
         if refresh:
@@ -64,7 +66,7 @@ def _load_inventory(inv_path: str, refresh: bool, raw: dict) -> tuple[dict, str]
     except (SystemExit, Exception) as e:
         print(f"  Live fetch failed: {e}", file=sys.stderr)
         sys.exit(1)
-    return build_owned(inv, raw.get("recipes", {}))
+    return build_owned(inv, raw.get("recipes", {})), inv
 
 
 def _run_weapon_chain_mode(
@@ -72,6 +74,7 @@ def _run_weapon_chain_mode(
     recipes_by_result: dict,
     owned: dict,
     loc_dict: dict,
+    mastered: set[str],
 ) -> None:
     """Build and display weapon upgrade chains for unowned final weapons."""
     chains, all_req, all_craft, shown = build_weapon_chains(
@@ -79,6 +82,7 @@ def _run_weapon_chain_mode(
         recipes_by_result,
         owned,
         loc_dict,
+        mastered=mastered,
     )
     if not chains:
         print("No weapon chains found in your progression data.")
@@ -94,6 +98,8 @@ def _run_weapon_chain_mode(
         final_un = chain[-1]
         final_norm = normalize_path(final_un)
         if owned.get(final_norm, 0) > 0:
+            continue
+        if final_norm in mastered:
             continue
         names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
         header = " \u2192 ".join(names)
@@ -207,6 +213,10 @@ def _aggregate_and_print(
     )  # noqa: E501
     all_requirements = preserve_blueprints(old_requirements, all_requirements)
 
+    for k, v in old_requirements.items():
+        if k not in all_requirements and not is_blueprint_un(k):
+            all_requirements[k] = v
+
     if not all_requirements:
         return
 
@@ -224,10 +234,11 @@ def main(args) -> None:
     loc_dict, raw, items_by_un, recipes_by_result, by_name = _load_export_db(args.items_cache)
 
     inv_path = args.inventory or os.path.join(DATA_DIR, "inventory.json")
-    owned = _load_inventory(inv_path, args.refresh, raw)
+    owned, inv = _load_inventory(inv_path, args.refresh, raw)
 
     if args.weapon_chain:
-        _run_weapon_chain_mode(items_by_un, recipes_by_result, owned, loc_dict)
+        mastered = {normalize_path(p) for p in build_mastered_set(inv)}
+        _run_weapon_chain_mode(items_by_un, recipes_by_result, owned, loc_dict, mastered)
         return
 
     queries = list(args.items)

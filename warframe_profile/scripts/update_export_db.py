@@ -45,6 +45,10 @@ DE_FILES = {
     "dict.en.json": "dict",
 }
 
+#: Labels for item-only categories in the export (excludes recipes and dict).
+#: Used by :func:`craft_model.build_items_by_un` to iterate item sources.
+DE_ITEM_LABELS = [v for v in DE_FILES.values() if v not in ("recipes", "dict")]
+
 #: Fields taken from WFCD items to enrich DE data.
 WFCD_FIELDS = [
     "isPrime",
@@ -54,6 +58,14 @@ WFCD_FIELDS = [
     "tradable",
     "masterable",
     "tags",
+    # Mod-specific fields
+    "type",
+    "rarity",
+    "polarity",
+    "baseDrain",
+    "fusionLimit",
+    "compatName",
+    "isAugment",
 ]
 
 
@@ -133,12 +145,15 @@ def _is_wfcd_item_relevant(wfcd_item: dict) -> bool:
         or "Prime" in cat
         or has_prime_comps
         or cat == "Relics"
+        or cat == "Mods"
     )
 
 
 def _correct_amp_masterable(merged: dict, un: str) -> None:
-    """Amp prisms contribute MR but WFCD marks them masterable=False."""
-    if "OperatorAmplifiers" in un and "Barrel" in un:
+    """Amp prisms contribute MR but WFCD marks them masterable=False.
+
+    Only the actual prism items (not their blueprints) count for MR."""
+    if "OperatorAmplifiers" in un and "Barrel" in un and "Blueprint" not in un:
         merged["masterable"] = True
 
 
@@ -162,6 +177,17 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
                 "masteryReq": de_item.get("masteryReq", 0),
             }
             _enrich_from_wfcd(merged, wfcd_by_un.get(un))
+
+            # Fallback: if the name is still empty, try stripping "Blueprint"
+            # and looking up the root item in WFCD (e.g. amp prism parts).
+            if not merged.get("name") and un.endswith("Blueprint"):
+                root_un = un[: -len("Blueprint")]
+                root_wfcd = wfcd_by_un.get(root_un)
+                if root_wfcd:
+                    merged["name"] = root_wfcd.get("name", "")
+                if not merged.get("name"):
+                    merged["name"] = un.split("/")[-1]
+
             _correct_amp_masterable(merged, un)
             items.append(merged)
 
@@ -173,7 +199,7 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
 
         merged: dict = {
             "uniqueName": un,
-            "name": wfcd_item.get("name", un.split("/")[-1]),
+            "name": wfcd_item.get("name") or un.split("/")[-1],
         }
         _enrich_from_wfcd(merged, wfcd_item)
         rewards = wfcd_item.get("rewards")

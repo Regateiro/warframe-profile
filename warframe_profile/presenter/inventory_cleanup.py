@@ -95,7 +95,7 @@ def main(args) -> None:
         db.recipes,
         build_owned(inv),
         owned_finished,
-        {},
+        db.locale,
         mastered=mastered,
     )
     section_excess_blueprints_components(excess)

@@ -29,10 +29,29 @@ import urllib.error
 import urllib.request
 from collections import defaultdict
 
+from warframe_profile import HTTP_TIMEOUT, USER_AGENT_DE
 from warframe_profile.model.utils import normalize_path
 
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
 INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={}&ct=STM"
+
+#: DE profile viewing API endpoint.  Format with ``playerId``.
+PROFILE_URL = "http://content.warframe.com/dynamic/getProfileViewingData.php?playerId={}"
+
+#: Warframe process name used for PID detection on Linux (Wine/Proton).
+WARFRAME_PROCESS_NAME = "Warframe.x64.exe"
+
+#: Regex for extracting accountId and nonce from the Warframe process URL.
+_CREDENTIAL_RE = re.compile(r"accountId=([a-z0-9]+)&nonce=(\d+)")
+
+#: Inventory section keys for mod data.
+MOD_SECTIONS: tuple[str, ...] = ("RawUpgrades", "Upgrades", "FocusUpgrades")
+
+#: Inventory section keys for miscellaneous items (resources, relics, etc.).
+MISC_ITEMS_SECTION = "MiscItems"
+
+#: Inventory section key for blueprints / recipes.
+RECIPES_SECTION = "Recipes"
 
 #: Inventory sections that contain equipment (weapons, warframes, sentinels, etc.).
 #: These are the top-level keys in the DE inventory API response that hold
@@ -85,7 +104,7 @@ def fetch_json(url: str) -> dict | list:
         InventoryFetchError: on HTTP or network errors.
     """
     try:
-        with urllib.request.urlopen(url, timeout=30) as r:
+        with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         raise InventoryFetchError(f"HTTP {e.code} fetching {url}") from e
@@ -203,7 +222,7 @@ def find_warframe_pid() -> int:
         try:
             with open(f"/proc/{pid_str}/cmdline") as f:
                 cmd = f.read()
-            if "Warframe.x64.exe" in cmd:
+            if WARFRAME_PROCESS_NAME in cmd:
                 return int(pid_str)
         except OSError:
             pass
@@ -294,7 +313,7 @@ def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
         if addr is None:
             continue
         url_str = chunk.decode("ascii", errors="replace")
-        m = re.search(r"accountId=([a-z0-9]+)&nonce=(\d+)", url_str)
+        m = _CREDENTIAL_RE.search(url_str)
         if m:
             return m.group(1), m.group(2)
     raise InventoryFetchError(
@@ -317,9 +336,9 @@ def fetch_inventory() -> tuple[dict, str]:
     inv_url = INVENTORY_URL.format(account_id, nonce)
     req = urllib.request.Request(
         inv_url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; calamity-inc/Soup)"},
+        headers={"User-Agent": USER_AGENT_DE},
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
         data = r.read()
     return json.loads(data), account_id
 
@@ -345,7 +364,7 @@ def fetch_de_profile(account_id: str) -> dict:
     Returns:
         The first result dict from the API response.
     """
-    url = f"http://content.warframe.com/dynamic/getProfileViewingData.php?playerId={account_id}"
+    url = PROFILE_URL.format(account_id)
     resp = fetch_json(url)
     if not isinstance(resp, dict):
         raise ProfileNotFoundError("Unexpected response format")
@@ -360,6 +379,48 @@ def fetch_de_profile(account_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # These functions transform the raw DE API inventory JSON into dicts and
 # sets that the analysis layer can work with efficiently.
+
+
+def build_owned_mods(inventory: dict, game_mod_paths: set[str] | None = None) -> dict[str, int]:
+    """Build a count of every mod the player owns.
+
+    Mods are stored across multiple inventory sections:
+    * ``RawUpgrades`` — uninstalled mods with ItemCount.
+    * ``Upgrades`` — equipped mods, augment cards, precepts, stances.
+    * ``FocusUpgrades`` — Focus Ways.
+
+    When *game_mod_paths* is provided (a set of normalised uniqueNames
+    from the export DB), only paths matching a known game mod are
+    counted.  This avoids false positives from non-mod upgrades like
+    melee trees, stickers, and empowered heavy melee entries.
+
+    Returns:
+        A ``dict[str, int]`` mapping normalised mod path → quantity owned.
+    """
+    owned: dict[str, int] = {}
+
+    for item in inventory.get("RawUpgrades", []):
+        path = normalize_path(item.get("ItemType", ""))
+        if path:
+            if game_mod_paths is not None and path not in game_mod_paths:
+                continue
+            owned[path] = owned.get(path, 0) + item.get("ItemCount", 1)
+
+    for item in inventory.get("Upgrades", []):
+        path = normalize_path(item.get("ItemType", ""))
+        if path:
+            if game_mod_paths is not None and path not in game_mod_paths:
+                continue
+            owned[path] = owned.get(path, 0) + 1
+
+    for item in inventory.get("FocusUpgrades", []):
+        path = normalize_path(item.get("ItemType", ""))
+        if path:
+            if game_mod_paths is not None and path not in game_mod_paths:
+                continue
+            owned[path] = owned.get(path, 0) + 1
+
+    return owned
 
 
 def build_mastered_set(inv: dict) -> set[str]:
@@ -522,11 +583,6 @@ def load_inventory_with_fallback(
     """
     if refresh or not os.path.exists(inv_path):
         inv, account_id = fetch_inventory()
-        try:
-            profile = fetch_de_profile(account_id)
-            merge_profile_data(inv, profile)
-        except (ProfileNotFoundError, InventoryFetchError) as e:
-            print(f"  Warning: could not fetch profile data: {e}", file=sys.stderr)
         with open(inv_path, "w") as f:
             json.dump(inv, f, indent=2)
         misc, rec, equip = inventory_summary(inv)

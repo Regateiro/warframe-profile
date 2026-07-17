@@ -15,19 +15,40 @@ The main entry point is :func:`analyze`, which produces an
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 
 from warframe_profile.model.craft_model import resolve_name
 from warframe_profile.model.inventory import ExportDB, build_owned
 from warframe_profile.model.utils import normalize_path
 
+
+class ItemStatus(str, Enum):
+    """Classification of a player's ownership status for a Prime item."""
+
+    HAVE_COPY = "have_copy"
+    BUILDABLE = "buildable"
+    PARTIAL = "partial"
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
+#: Categories whose prime parts use the "Warframe" naming convention
+#: (part names always get "Blueprint" appended).
+_FRAME_CATEGORIES: frozenset[str] = frozenset({"Warframes", "Archwing"})
+
+#: Categories whose prime parts use the "Weapon" naming convention
+#: (part names are used directly without "Blueprint" suffix).
+_WEAPON_PART_CATEGORIES: frozenset[str] = frozenset({
+    "Primary", "Secondary", "Melee",
+    "Sentinels", "SentinelWeapons",
+    "SpaceGuns", "SpaceMelee", "SpaceSuits",
+})
+
 #: Weapon categories that can be primed.  Used to identify which items
 #: in the export DB are weapons (as opposed to resources, gear, etc.)
 #: when building ingredient indices.
-_WEAPON_CATEGORIES = {"Primary", "Secondary", "Melee"}
+WEAPON_CATEGORIES = {"Primary", "Secondary", "Melee"}
 
 #: Subjective rarity tiers used to determine the "rarest" component of a
 #: craftable weapon (for the cleanup sell list).
@@ -242,6 +263,9 @@ def _compute_extra_builds(
     for un, info in prime_map.items():
         if info["is_cosmetic"]:
             continue
+        # Don't count sub-craft dependencies for items the player already owns.
+        if normalize_path(un) in owned_finished:
+            continue
         for part in info["parts"]:
             if part["uniqueName"] in buildable_keys:
                 component_need[part["uniqueName"]] += part["count"]
@@ -330,6 +354,21 @@ class RelicInfo:
     unowned: list[str]
 
 
+#: Component names that are NOT component-level items — they are either the
+#: blueprint itself or weapon sub-parts (e.g. zaw parts) whose names match
+#: generic sub-component terms.  Used by :func:`build_component_blueprint_map`.
+_NON_COMPONENT_NAMES: frozenset[str] = frozenset({
+    "Blueprint", "Ornament", "Handle", "Blade", "Link", "Head",
+})
+
+#: WFCD categories that are cosmetic (not tradable for ducats).
+_COSMETIC_CATEGORIES: frozenset[str] = frozenset({
+    "Skins", "Glyphs", "Sigils", "Node",
+})
+
+#: Tags / category substrings used to identify Prime items in the export DB.
+_PRIME_TAGS: frozenset[str] = frozenset({"Prime", "PrimePart"})
+
 #: Reward names that are never prime parts and always safe to acquire.
 _NON_PRIME_REWARDS: set[str] = {
     "Forma Blueprint",
@@ -348,17 +387,23 @@ _NON_PRIME_REWARDS: set[str] = {
     "Xata",
 }
 
+#: DE internal tier codes → relic display names.
+_RELIC_TIER_MAP: dict[str, str] = {
+    "/T1VoidProjection": "Lith",
+    "/T2VoidProjection": "Meso",
+    "/T3VoidProjection": "Neo",
+    "/T4VoidProjection": "Axi",
+}
+
+#: Relic refinement tier suffixes (from lowest to highest).
+_RELIC_REFINEMENTS: tuple[str, ...] = (" Intact", " Exceptional", " Flawless", " Radiant")
+
 
 def _tier_from_un(un: str) -> str:
     """Extract the relic tier string from a uniqueName path."""
-    if "/T1VoidProjection" in un:
-        return "Lith"
-    if "/T2VoidProjection" in un:
-        return "Meso"
-    if "/T3VoidProjection" in un:
-        return "Neo"
-    if "/T4VoidProjection" in un:
-        return "Axi"
+    for pattern, tier in _RELIC_TIER_MAP.items():
+        if pattern in un:
+            return tier
     return ""
 
 
@@ -367,7 +412,7 @@ def _shorten_name(full_name: str) -> str:
 
     E.g. ``"Axi P7 Intact"`` → ``"Axi P7"``.
     """
-    for suffix in (" Intact", " Exceptional", " Flawless", " Radiant"):
+    for suffix in _RELIC_REFINEMENTS:
         if full_name.endswith(suffix):
             return full_name[: -len(suffix)]
     return full_name
@@ -466,21 +511,12 @@ def _reward_names_for_part(
     if "Prime" in part_name and part_name != "Blueprint":
         return [part_name]
 
-    if category in ("Warframes", "Archwing"):
+    if category in _FRAME_CATEGORIES:
         if part_name == "Blueprint":
             return [f"{item_name} Blueprint"]
         return [f"{item_name} {part_name} Blueprint"]
 
-    if category in (
-        "Primary",
-        "Secondary",
-        "Melee",
-        "Sentinels",
-        "SentinelWeapons",
-        "SpaceGuns",
-        "SpaceMelee",
-        "SpaceSuits",
-    ):
+    if category in _WEAPON_PART_CATEGORIES:
         if part_name == "Blueprint":
             return [f"{item_name} Blueprint"]
         return [f"{item_name} {part_name}"]
@@ -752,7 +788,7 @@ def build_ingredient_index_craftable_to_owned(
     weapon_uns: set[str] = {
         item["uniqueName"]
         for item in items
-        if item.get("uniqueName") and item.get("category") in _WEAPON_CATEGORIES
+        if item.get("uniqueName") and item.get("category") in WEAPON_CATEGORIES
     }
 
     # Build reverse indices: resultType → recipe_data and
@@ -962,7 +998,7 @@ def build_market_credit_map(items: list[dict]) -> dict[str, dict]:
         if not un or not name:
             continue
         cat = item.get("category", "")
-        if cat not in _WEAPON_CATEGORIES:
+        if cat not in WEAPON_CATEGORIES:
             continue
         if name.lower().startswith("mk1-"):
             market[un] = {"name": name, "category": cat, "buy_type": "direct"}
@@ -1016,7 +1052,7 @@ def build_item_index(items: list[dict]) -> dict[str, dict]:
     for item in items:
         un = item.get("uniqueName", "")
         if un:
-            by_un[un] = item
+            by_un[normalize_path(un)] = item
     return by_un
 
 
@@ -1067,7 +1103,7 @@ def find_owned_item_uns(
     for sect in equipment_sections:
         for eq in inventory.get(sect, []):
             un = eq.get("ItemType", "")
-            item = items_by_un.get(un)
+            item = items_by_un.get(normalize_path(un))
             if item and not item.get("isPrime"):
                 owned.add(un)
     return owned
@@ -1154,7 +1190,7 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
             continue
         tags = item.get("tags", []) or []
         cat = item.get("category", "")
-        if not any(t in str(tags) or t in cat for t in ["Prime", "PrimePart"]):
+        if not any(t in str(tags) or t in cat for t in _PRIME_TAGS):
             if "prime" not in item.get("name", "").lower():
                 continue
 
@@ -1181,10 +1217,47 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
             "category": cat,
             "masteryReq": item.get("masteryReq", 0),
             "parts": parts_needed,
-            "is_cosmetic": cat in ("Skins", "Glyphs", "Sigils", "Node"),
+            "is_cosmetic": cat in _COSMETIC_CATEGORIES,
             "masterable": item.get("masterable", False),
         }
     return primes
+
+
+def build_component_blueprint_map(
+    recipes: dict,
+    prime_map: dict[str, dict],
+) -> dict[str, tuple[str, int]]:
+    """Map prime component uniqueName → (blueprint uniqueName, ducats).
+
+    For every component that appears in a prime item's parts list, check
+    whether a blueprint exists that produces it.  This is limited to
+    component-level items (Chassis, Neuroptics, Systems) so that main
+    item blueprints (full weapons/warframes) are not included.
+    """
+    # Collect component uniqueNames from the prime map, excluding
+    # components that are themselves full prime items (e.g. Bronco Prime
+    # used as ingredient for Akbronco Prime) — a full prime item has a
+    # non-empty parts list in the prime_map.  Those would produce
+    # confusing names if mapped through their parent akimbo entry.
+    component_uns: set[str] = set()
+    for info in prime_map.values():
+        for part in info["parts"]:
+            if part["uniqueName"] in prime_map and prime_map[part["uniqueName"]]["parts"]:
+                continue
+            if part["name"] not in _NON_COMPONENT_NAMES:
+                component_uns.add(part["uniqueName"])
+
+    comp_to_bp: dict[str, tuple[str, int]] = {}
+    for bp_un, recipe in recipes.items():
+        result_un = recipe.get("resultType", "")
+        if not result_un:
+            continue
+        if result_un not in component_uns:
+            continue
+        ducats = recipe.get("primeSellingPrice") or recipe.get("ducats", 0)
+        if ducats:
+            comp_to_bp[result_un] = (bp_un, ducats)
+    return comp_to_bp
 
 
 def _analyze_parts(
@@ -1193,6 +1266,7 @@ def _analyze_parts(
     needed_builds: int,
     owned: dict,
     owned_finished: set,
+    comp_to_bp: dict[str, tuple[str, int]] | None = None,
 ) -> tuple[list[PartAnalysis], int]:
     """Analyse parts for a prime item; return ``(part_analyses, missing_count)``."""
     part_analysis: list[PartAnalysis] = []
@@ -1220,6 +1294,29 @@ def _analyze_parts(
                 )
             )
         missing_parts += missing
+
+        # Add blueprint entries for component parts that the player owns.
+        # Only mark as surplus (sellable) if the component's need is already
+        # covered — otherwise the blueprint is better kept for crafting.
+        if comp_to_bp and part["name"] != "Blueprint":
+            bp_info = comp_to_bp.get(part["uniqueName"])
+            if bp_info:
+                bp_un, bp_ducats = bp_info
+                bp_owned = owned.get(normalize_path(bp_un), 0)
+                if bp_owned > 0:
+                    bp_surplus = max(0, bp_owned - missing)
+                    if bp_surplus > 0:
+                        part_analysis.append(
+                            PartAnalysis(
+                                name=part["name"] + " Blueprint",
+                                owned=bp_owned,
+                                needed=0,
+                                surplus=bp_surplus,
+                                missing=0,
+                                ducats=bp_ducats,
+                            )
+                        )
+
     return part_analysis, missing_parts
 
 
@@ -1259,6 +1356,7 @@ def _classify_prime_item(
     owned_finished: set,
     extra_builds: dict,
     prime_map: dict,
+    comp_to_bp: dict[str, tuple[str, int]] | None = None,
 ) -> tuple[ItemResult | None, MissingPrime | None]:
     """Analyse one prime item and return ``(item_result, missing_prime)``."""
     norm = normalize_path(un)
@@ -1270,14 +1368,14 @@ def _classify_prime_item(
     extra = extra_builds.get(un, 0)
 
     part_analysis, missing_parts = _analyze_parts(
-        info, prime_map, needed_builds, owned, owned_finished
+        info, prime_map, needed_builds, owned, owned_finished, comp_to_bp=comp_to_bp
     )  # noqa: E501
 
     if has_copy:
         return _make_item_result(
             name,
             cat,
-            "have_copy",
+            ItemStatus.HAVE_COPY,
             needed_builds,
             extra,
             info["masteryReq"],
@@ -1291,7 +1389,7 @@ def _classify_prime_item(
         return _make_item_result(
             name,
             cat,
-            "buildable",
+            ItemStatus.BUILDABLE,
             needed_builds,
             extra,
             info["masteryReq"],
@@ -1305,7 +1403,7 @@ def _classify_prime_item(
         return _make_item_result(
             name,
             cat,
-            "partial",
+            ItemStatus.PARTIAL,
             needed_builds,
             extra,
             info["masteryReq"],
@@ -1326,6 +1424,7 @@ def analyze(
     prime_map: dict[str, dict],
     equipment_sections: list[str],
     mastered: set[str] | None = None,
+    recipes: dict | None = None,
 ) -> AnalysisResult:
     """Cross-reference inventory against prime_map.
 
@@ -1343,9 +1442,10 @@ def analyze(
     2. Per-item analysis — for each Prime, compute owned/needed/surplus/missing
        for every tradable component, and aggregate ducat values.
     """
-    owned = build_owned(inventory)
+    owned = build_owned(inventory, recipes=recipes)
     owned_finished = _compute_owned_finished(inventory, equipment_sections, mastered)
     extra_builds = _compute_extra_builds(prime_map, owned, owned_finished)
+    comp_to_bp = build_component_blueprint_map(recipes or {}, prime_map)
 
     results: list[ItemResult] = []
     missing_primes: list[MissingPrime] = []
@@ -1357,7 +1457,7 @@ def analyze(
             continue
 
         item_result, missing_prime = _classify_prime_item(
-            un, info, owned, owned_finished, extra_builds, prime_map
+            un, info, owned, owned_finished, extra_builds, prime_map, comp_to_bp=comp_to_bp
         )  # noqa: E501
 
         if item_result:

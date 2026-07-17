@@ -1,9 +1,6 @@
 """Entry point for ``python -m warframe_profile`` and ``python warframe.py``.
 
-Parses exactly one of ``--craft``, ``--ducats``, ``--cleanup``,
-``--update``, ``--relics`` and dispatches to the corresponding module.
-All arguments are defined in a single parser so sub-commands never
-need their own :class:`argparse.ArgumentParser`.
+Dispatches to the corresponding module based on the selected sub-command.
 """
 
 import argparse
@@ -11,12 +8,10 @@ import importlib
 import os
 import sys
 
-from warframe_profile import DATA_DIR
+from warframe_profile import DATA_DIR, DEFAULT_ACCOUNT_ID
 from warframe_profile.model.inventory import load_inventory_with_fallback
 
-#: Maps CLI flag names to (module_path, function_name) pairs.
-#: The ``--update`` flag targets the scripts package; all others
-#: target the presenter layer.
+#: Maps sub-command names to (module_path, function_name) pairs.
 _COMMAND_TABLE = {
     "craft": ("warframe_profile.presenter.craft_tree", "main"),
     "ducats": ("warframe_profile.presenter.cli", "main"),
@@ -25,6 +20,7 @@ _COMMAND_TABLE = {
     "relics": ("warframe_profile.presenter.cli", "relics_main"),
     "serve": ("warframe_profile.presenter.web_server", "main"),
     "mastery": ("warframe_profile.presenter.mastery", "main"),
+    "mods": ("warframe_profile.presenter.missing_mods", "main"),
 }
 
 
@@ -32,19 +28,9 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build the single, unified argument parser for all sub-commands."""
     parser = argparse.ArgumentParser(description="Warframe Profile Tool")
 
-    # -- Mode selector (exactly one required).
-    mode = parser.add_argument_group("mode (exactly one required)")
-    mode.add_argument("--craft", action="store_true", help="Crafting tree browser")
-    mode.add_argument("--ducats", action="store_true", help="Prime part / ducats analyzer")
-    mode.add_argument("--cleanup", action="store_true", help="Inventory cleanup suggestions")
-    mode.add_argument("--update", action="store_true", help="Update export database")
-    mode.add_argument("--relics", action="store_true", help="Relic drop analysis")
-    mode.add_argument("--serve", action="store_true", help="Start web UI server")
-    mode.add_argument(
-        "--mastery", action="store_true", help="Mastery rank progression & farming guide"
-    )
-
     # -- Shared options (used by multiple sub-commands).
+    # These are on the main parser so shared flags like --refresh must be
+    # placed *before* the sub-command name (e.g. ``--refresh ducats``).
     shared = parser.add_argument_group("shared options")
     shared.add_argument("--inventory", "-i", help="Path to cached inventory.json")
     shared.add_argument(
@@ -56,7 +42,7 @@ def _build_parser() -> argparse.ArgumentParser:
     shared.add_argument(
         "--profile",
         "-p",
-        default="57c71e613ade7fa2a211997b",
+        default=DEFAULT_ACCOUNT_ID,
         help="DE account ID for player display",
     )
     shared.add_argument(
@@ -69,15 +55,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     shared.add_argument("--port", type=int, default=8080, help="Web server port (default: 8080)")
 
-    # -- Craft-tree options (only meaningful with --craft).
-    craft = parser.add_argument_group("craft-tree options")
-    craft.add_argument("items", nargs="*", help="Item name(s) to look up")
-    craft.add_argument("--depth", type=int, default=99, help="Max recursion depth for expansion")
-    craft.add_argument("--select", type=int, default=None, help="Select match index when multiple")
-    craft.add_argument("--interactive", action="store_true", help="Interactive item selection")
-    craft.add_argument(
+    # -- Sub-commands (optional so bare --refresh works).
+    sub = parser.add_subparsers(dest="command", help="Available commands")
+
+    craft_sub = sub.add_parser("craft", help="Crafting tree browser")
+    craft_sub.add_argument("items", nargs="*", help="Item name(s) to look up")
+    craft_sub.add_argument("--depth", type=int, default=99, help="Max recursion depth for expansion")
+    craft_sub.add_argument("--select", type=int, default=None, help="Select match index when multiple")
+    craft_sub.add_argument("--interactive", action="store_true", help="Interactive item selection")
+    craft_sub.add_argument(
         "--weapon-chain", action="store_true", help="Analyze all weapon upgrade chains"
     )
+
+    sub.add_parser("ducats", help="Prime part / ducats analyzer")
+    sub.add_parser("cleanup", help="Inventory cleanup suggestions")
+    sub.add_parser("update", help="Update export database")
+    sub.add_parser("relics", help="Relic drop analysis")
+    sub.add_parser("serve", help="Start web UI server")
+    sub.add_parser("mastery", help="Mastery rank progression & farming guide")
+    sub.add_parser("mods", help="List mods you don't own yet")
 
     return parser
 
@@ -87,42 +83,22 @@ def main() -> int:
 
     Returns:
         Exit code (0 on success, 1 on error).
-
-    Flow:
-        1. Parse CLI args into a single namespace.
-        2. If ``--refresh`` is used alone (no sub-command), just fetch
-           inventory and exit.
-        3. Otherwise, look up the selected flag in ``_COMMAND_TABLE``,
-           import the target module dynamically, and call its ``main()``.
     """
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Find the single flag that was set.
-    selected = [
-        name
-        for name in ("craft", "ducats", "cleanup", "update", "relics", "serve", "mastery")
-        if getattr(args, name)
-    ]
-
     # Standalone --refresh (no sub-command): just fetch inventory and exit.
-    if args.refresh and not selected:
+    if args.refresh and not args.command:
         inv_path = args.inventory or os.path.join(DATA_DIR, "inventory.json")
         load_inventory_with_fallback(inv_path, refresh=True)
         return 0
 
-    # Exactly one sub-command flag is required.
-    if len(selected) != 1:
+    # Dynamic import and dispatch to the target module.
+    name = args.command
+    if name not in _COMMAND_TABLE:
         parser.print_help()
-        print(
-            "\nSpecify exactly one of: --craft, --ducats, --cleanup, "
-            "--update, --relics, --serve, --mastery",
-            file=sys.stderr,
-        )
         return 1
 
-    # Dynamic import and dispatch to the target module.
-    name = selected[0]
     mod_name, func_name = _COMMAND_TABLE[name]
     mod = importlib.import_module(mod_name)
     func = getattr(mod, func_name)
