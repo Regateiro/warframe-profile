@@ -21,6 +21,8 @@ from warframe_profile.model.analysis import (
     build_owned,
     build_prime_map,
     build_relics_map,
+    compute_extra_builds,
+    compute_owned_finished,
     compute_sellable_equipment,
 )
 from warframe_profile.model.inventory import (
@@ -76,8 +78,22 @@ def _run(
     # Build mastered set (items ever ranked up, even if sold).
     mastered = build_mastered_set(inv)
 
+    # Derived ownership state — computed once and shared by every phase.
+    owned = build_owned(inv, recipes=db.recipes)
+    owned_finished = compute_owned_finished(inv, EQUIPMENT_SECTIONS, mastered)
+    extra_builds = compute_extra_builds(prime_map, owned, owned_finished)
+
     # Run core analysis.
-    data = analyze(inv, prime_map, EQUIPMENT_SECTIONS, mastered=mastered, recipes=db.recipes)
+    data = analyze(
+        inv,
+        prime_map,
+        EQUIPMENT_SECTIONS,
+        mastered=mastered,
+        recipes=db.recipes,
+        owned=owned,
+        owned_finished=owned_finished,
+        extra_builds=extra_builds,
+    )
 
     # Compute sellable equipment index.
     data.sellable = compute_sellable_equipment(
@@ -86,16 +102,32 @@ def _run(
         EQUIPMENT_SECTIONS,
     )
 
-    owned = build_owned(inv)
-
     if not show_relics:
         print_report(data)
         return
 
     # --relics mode: show relic tables only.
-    needed = build_needed_drops(items, inv, prime_map, owned, EQUIPMENT_SECTIONS, mastered=mastered)
+    needed = build_needed_drops(
+        items,
+        inv,
+        prime_map,
+        owned,
+        EQUIPMENT_SECTIONS,
+        mastered=mastered,
+        owned_finished=owned_finished,
+        extra_builds=extra_builds,
+    )
     print_needed_drops(needed)
-    relics = build_relics_map(items, inv, prime_map, owned, EQUIPMENT_SECTIONS, mastered=mastered)
+    relics = build_relics_map(
+        items,
+        inv,
+        prime_map,
+        owned,
+        EQUIPMENT_SECTIONS,
+        mastered=mastered,
+        owned_finished=owned_finished,
+        extra_builds=extra_builds,
+    )
     print_safe_relics(relics)
 
 

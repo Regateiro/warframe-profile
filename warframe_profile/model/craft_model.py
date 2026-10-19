@@ -40,21 +40,35 @@ from warframe_profile.model.utils import normalize_path
 def build_items_by_un(db: dict) -> dict:
     """Build a ``uniqueName.lower() → item`` lookup from the export.
 
-    Items are sourced from these top-level keys of the DE export dict:
-    ``warframes, weapons, resources, customs, gear, sentinels, keys``.
-    Each item gets a ``_source`` key so :func:`categorize` can determine
-    the human-readable category later.
+    Older databases store items in the raw per-category DE sections
+    (``warframes, weapons, resources, customs, gear, sentinels, keys``);
+    each item gets a ``_source`` key so :func:`categorize` can determine
+    the human-readable category later.  Newer, compact databases store the
+    already-merged ``items`` list instead, so fall back to that when the raw
+    sections are absent.
 
     The key is lowercased uniqueName for case-insensitive lookups.
     """
     items: dict = {}
     from warframe_profile.scripts.update_export_db import DE_ITEM_LABELS
 
-    for label in DE_ITEM_LABELS:
-        for un, val in db.get(label, {}).items():
-            val["uniqueName"] = un
-            val["_source"] = label
-            items[un.lower()] = val
+    raw_sections_present = any(isinstance(db.get(label), dict) for label in DE_ITEM_LABELS)
+    if raw_sections_present:
+        for label in DE_ITEM_LABELS:
+            for un, val in db.get(label, {}).items():
+                val["uniqueName"] = un
+                val["_source"] = label
+                items[un.lower()] = val
+        return items
+
+    for item in db.get("items", []):
+        # ``_source`` is only set for items that came from a DE item section;
+        # WFCD-only extras are intentionally excluded from the craft index.
+        if not item.get("_source"):
+            continue
+        un = item.get("uniqueName", "")
+        if un:
+            items[un.lower()] = item
     return items
 
 
@@ -558,15 +572,14 @@ def is_blueprint_un(un: str) -> bool:
     return "/Blueprint" in un or un.lower().endswith("blueprint")
 
 
+_CAMEL_CASE_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
 def un_to_name(un: str) -> str:
     """Convert a raw uniqueName to a rough display name."""
     name = un.split("/")[-1]
     name = name.replace("Component", "").replace("Blueprint", "")
-    name = re.sub(
-        r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])",
-        " ",
-        name,
-    )
+    name = _CAMEL_CASE_RE.sub(" ", name)
     return name.strip()
 
 

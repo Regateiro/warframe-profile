@@ -7,6 +7,7 @@ caches them locally for use by the missing mods presenter.
 import json
 import os
 import sys
+import time
 import urllib.request
 from typing import Any
 
@@ -23,6 +24,11 @@ _CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
 _CACHE_PATH = os.path.join(_CACHE_DIR, "mod_drop_locations.json")
 
 
+#: Module-level memo of the parsed lookup, keyed by ``(cache_mtime, force)``.
+_memo: tuple[float, bool] | None = None
+_memo_value: dict[str, list[dict[str, Any]]] | None = None
+
+
 def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
     """Load mod drop location data.
 
@@ -30,22 +36,33 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
     mapping mod name → list of drop source dicts with keys:
     ``enemy``, ``rarity``, ``chance``.
 
+    The parsed result is memoised for the lifetime of the process so the
+    ~1 MB cache file is read at most once per run.
+
     Args:
         force_refresh: If True, re-fetch even if cache exists.
 
     Returns:
         Dict mapping mod name → list of drop sources.
     """
+    global _memo, _memo_value
+
     cache_path = os.path.abspath(_CACHE_PATH)
+    cache_mtime = os.path.getmtime(cache_path) if os.path.exists(cache_path) else 0.0
+
+    if not force_refresh and _memo is not None and _memo == (cache_mtime, False):
+        return _memo_value
 
     # Use cache if it exists and is < 24 hours old
     if not force_refresh and os.path.exists(cache_path):
-        age_hours = (os.path.getmtime(cache_path) - os.path.getmtime(cache_path)) / 3600
+        age_hours = (time.time() - os.path.getmtime(cache_path)) / 3600
         if age_hours < 24:
             try:
                 with open(cache_path) as f:
                     data = json.load(f)
-                return _build_lookup(data)
+                _memo = (cache_mtime, False)
+                _memo_value = _build_lookup(data)
+                return _memo_value
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -63,14 +80,18 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
         with open(cache_path, "w") as f:
             json.dump(raw, f)
 
-        return _build_lookup(raw)
+        _memo = (os.path.getmtime(cache_path), False)
+        _memo_value = _build_lookup(raw)
+        return _memo_value
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Warning: could not fetch mod drop data: {exc}", file=sys.stderr)
         # Try stale cache
         if os.path.exists(cache_path):
             with open(cache_path) as f:
                 data = json.load(f)
-            return _build_lookup(data)
+            _memo = (cache_mtime, False)
+            _memo_value = _build_lookup(data)
+            return _memo_value
         return {}
 
 

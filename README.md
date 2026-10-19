@@ -12,6 +12,7 @@ materials you still need to farm.
 | `--ducats` | Prime-part / ducats analysis — shows owned, buildable, and partial items with surplus ducat values |
 | `--craft`  | Interactive crafting-tree browser — resolves full dependency trees for any item |
 | `--cleanup` | Inventory cleanup — lists weapons safe to sell (re-buyable or replaced by a Prime variant) |
+| `--foundry` | Export your inventory in the import format accepted by [Warframe Foundry](https://warframe-foundry.app/) |
 | `--update` | Download and merge the latest DE export + WFCD item database |
 
 Additional highlights:
@@ -115,6 +116,51 @@ Shows two sections:
 2. **Items to Sell (Own Prime Variant)** — non-Prime weapons whose Prime
    variant you already own.
 
+### Export for Warframe Foundry
+
+```bash
+# Write data/warframe-foundry.json from the cached inventory:
+python warframe.py foundry
+
+# Live inventory scan (Warframe must be running):
+python warframe.py --refresh foundry
+
+# Write to a custom path:
+python warframe.py foundry --output /path/to/warframe-foundry.json
+
+# Add Steel Path progress (not tracked in the inventory export):
+# By XP total (Steel Path nodes/junctions award the same ~63/1000 mastery
+# as the normal chart, so the single number the game exposes is enough):
+python warframe.py foundry --steel-xp 21455
+# Or by explicit counts:
+python warframe.py foundry --steel-missions 232 --steel-junctions 13
+```
+
+Produces a `warframe-foundry.json` file in the exact import format accepted
+by [Warframe Foundry](https://warframe-foundry.app/).  It encodes:
+
+- **Items** — every owned piece of equipment marked `built`, every item
+  whose total XP reaches its single-pass max (rank 30: 900,000 for
+  warframes/archwings/companions, 450,000 for weapons; rank 40: 1,600,000
+  for necramechs, 800,000 for Kuva/Tenet/Coda/Paracesis) marked `mastered`,
+  and owned blueprints / parts as per-item component counts.  Partially
+  ranked items (e.g. a necramech with 460k XP) are *not* marked mastered.
+- **Resources** — owned material counts (Orokin Cell, Plastids, etc.).
+- **Settings** — mission / junction / intrinsics counts, auto-derived from
+  the inventory (`Missions` node tags and `PlayerSkills` intrinsics), so the
+  Foundry's Mastery Rank matches your real progress.  Steel Path counts
+  aren't exposed in the inventory export; pass `--steel-xp` with your total
+  Steel Path mastery gained and it is split into steel mission / junction
+  counts automatically (or set them directly with `--steel-missions` /
+  `--steel-junctions`; `--missions`, `--junctions`, `--intrinsics` override
+  any of the auto-derived values).
+
+After exporting, the command prints an estimate of the Mastery Rank the
+Foundry will display.  Open warframe-foundry.app, press **Import Data**, and
+select the file.  The web UI (`python warframe.py serve`) also offers a
+**Export for Warframe Foundry** button on the home page that downloads the
+same file.
+
 ## Data sources
 
 - **DE Public Export**: [`https://browse.wf/warframe-public-export-plus/`](https://browse.wf/warframe-public-export-plus/)
@@ -132,16 +178,28 @@ warframe-profile/
   warframe.py                                # Unified entrypoint
   warframe_profile/
     __init__.py                              # Package init, DATA_DIR
-    __main__.py                              # --craft/--ducats/--cleanup/--update dispatcher
-    inventory.py                             # Memory scanning, API fetching, shared helpers
-    analysis.py                              # Prime-map indexing & cross-reference analysis
-    cli.py                                   # CLI for --ducats sub-command
-    report.py                                # Report formatting (prettytable tables)
+    __main__.py                              # Sub-command dispatcher (--craft/--ducats/...)
+    model/                                   # Data layer: inventory, export DB, analysis
+      inventory.py                           # Memory scanning, API fetching, shared helpers
+      analysis.py                            # Prime-map indexing & cross-reference analysis
+      craft_model.py                         # Item/recipe indices for the craft tree
+      foundry_export.py                      # Warframe Foundry import-file builder
+      ...
+    presenter/                               # CLI + web sub-command entry points
+      cli.py                                 # --ducats / --relics
+      craft_tree.py                          # --craft
+      inventory_cleanup.py                   # --cleanup
+      mastery.py                             # --mastery
+      missing_mods.py                        # --mods
+      foundry_export.py                      # --foundry
+      web_server.py                          # --serve
+    view/                                    # Output rendering (tables / HTML)
+      report.py                              # prettytable report formatting
+      web/templates.py                       # Web UI HTML templates
     scripts/
-      craft_tree.py                          # --craft: crafting tree browser
-      inventory_cleanup.py                   # --cleanup: sell-recommendation tool
       update_export_db.py                    # --update: download & merge export data
   data/
     export_db.json                           # Merged item database (generated)
     inventory.json                           # Cached inventory (generated)
+    warframe-foundry.json                    # Foundry import file (generated by `foundry`)
 ```

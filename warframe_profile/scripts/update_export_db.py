@@ -158,16 +158,23 @@ def _correct_amp_masterable(merged: dict, un: str) -> None:
 
 
 def merge(export: dict, wfcd_items: list[dict]) -> dict:
-    """Merge DE export data with WFCD item data."""
+    """Merge DE export data with WFCD item data.
+
+    The output keeps only ``items`` (the merged list), ``recipes`` and
+    ``dict`` — the raw per-category DE sections are not duplicated.
+    """
     wfcd_by_un = _index_wfcd_by_un(wfcd_items)
     loc: dict = export.get("dict", {})
     items: list[dict] = []
     seen: set[str] = set()
 
-    de_categories = [v for k, v in export.items() if isinstance(v, dict) and k != "dict"]
-
-    for cat_data in de_categories:
+    for label in DE_ITEM_LABELS:
+        cat_data = export.get(label)
+        if not isinstance(cat_data, dict):
+            continue
         for un, de_item in cat_data.items():
+            if un in seen:
+                continue
             seen.add(un)
 
             merged: dict = {
@@ -175,6 +182,7 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
                 "name": _resolve_name(de_item.get("name", ""), loc),
                 "productCategory": de_item.get("productCategory", ""),
                 "masteryReq": de_item.get("masteryReq", 0),
+                "_source": label,
             }
             _enrich_from_wfcd(merged, wfcd_by_un.get(un))
 
@@ -208,9 +216,11 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
         _correct_amp_masterable(merged, un)
         items.append(merged)
 
-    result = dict(export)
-    result["items"] = items
-    return result
+    return {
+        "items": items,
+        "recipes": export.get("recipes", {}),
+        "dict": loc,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +279,7 @@ def main(args=None) -> None:
 
     # Write output.
     with open(out_path, "w") as f:
-        json.dump(merged, f, indent=2)
+        json.dump(merged, f, separators=(",", ":"))
 
     n_items = len(merged["items"])
     n_dict = len(merged.get("dict", {}))

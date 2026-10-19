@@ -53,9 +53,10 @@ MISC_ITEMS_SECTION = "MiscItems"
 #: Inventory section key for blueprints / recipes.
 RECIPES_SECTION = "Recipes"
 
-#: Inventory sections that contain equipment (weapons, warframes, sentinels, etc.).
-#: These are the top-level keys in the DE inventory API response that hold
-#: owned equipment items.  Used by ``build_owned`` and analysis functions.
+#: Inventory sections that contain equipment (weapons, warframes, necramechs,
+#: sentinels, etc.).  These are the top-level keys in the DE inventory API
+#: response that hold owned equipment items.  Used by ``build_owned`` and
+#: analysis functions.
 EQUIPMENT_SECTIONS: list[str] = [
     "Suits",
     "LongGuns",
@@ -66,6 +67,7 @@ EQUIPMENT_SECTIONS: list[str] = [
     "SpaceSuits",
     "SpaceGuns",
     "SpaceMelee",
+    "MechSuits",
 ]
 
 

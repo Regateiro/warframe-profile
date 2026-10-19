@@ -22,20 +22,6 @@ from warframe_profile.model.inventory import (
 )
 from warframe_profile.model.utils import normalize_path
 
-# WFCD mod types to exclude from the missing report
-_SKIP_TYPES = {
-    "Arch-Gun Riven Mod",
-    "Kitgun Riven Mod",
-    "Melee Riven Mod",
-    "Pistol Riven Mod",
-    "Rifle Riven Mod",
-    "Shotgun Riven Mod",
-    "Zaw Riven Mod",
-    "Companion Weapon Riven Mod",
-    "Focus Way",
-    "Transmutation Mod",
-}
-
 # Requiem mod names — drop from Kuva Lich / Sister / Coda murmurs
 _REQUIEM_NAMES = frozenset({
     "Lohk", "Xata", "Jahu", "Khra", "Vome", "Fass", "Netra", "Oull", "Ris",

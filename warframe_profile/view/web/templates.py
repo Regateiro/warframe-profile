@@ -13,6 +13,7 @@ The page layout includes:
 This module is the **web view** in the MVP pattern.
 """
 
+import html
 import math
 from collections import defaultdict
 
@@ -22,6 +23,7 @@ from warframe_profile.model.craft_model import (
     has_recipe,
     is_blueprint_un,
     resolve_name,
+    resolve_tree,
     should_expand,
     un_to_name,
 )
@@ -33,9 +35,8 @@ YELLOW = "#f1c40f"
 DIM = "#7f8c8d"
 
 
-def _page_styles() -> str:
-    """Return the shared CSS stylesheet for all pages (GitHub-dark theme)."""
-    return f"""<style>
+#: Shared stylesheet for all pages (GitHub-dark theme), built once at import.
+_PAGE_STYLES = f"""<style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           background: #0d1117; color: #c9d1d9; padding: 20px; }}
@@ -115,8 +116,8 @@ def _page(title: str, content: str, active: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title} — Warframe Profile</title>
-{_page_styles()}
+<title>{html.escape(title)} — Warframe Profile</title>
+{_PAGE_STYLES}
 </head>
 <body>
 <h1>Warframe Profile</h1>
@@ -169,14 +170,21 @@ def render_home() -> str:
     return _page(
         "Home",
         """
-<div class="flash">Select a tab above to explore your Warframe profile.</div>
+<div class="flash">Select a tab above to explore your Warframe profile.
+  <a href="/foundry-export" style="float:right;display:inline-block;padding:4px 12px;
+     border-radius:6px;background:#1f6feb;color:#fff;text-decoration:none">
+     Export for Warframe Foundry</a>
+</div>
 <ul style="margin-left:20px;line-height:1.8">
   <li><strong>Ducats</strong> — Prime part analysis, missing items, sell recommendations</li>
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
-</ul>""",
+</ul>
+<p class="dim" style="font-size:0.8rem">The <strong>Export for Warframe Foundry</strong> button
+downloads a <code>warframe-foundry.json</code> file you can import at
+<a href="https://warframe-foundry.app/" style="color:#58a6ff">warframe-foundry.app</a>.</p>""",
         "home",
     )
 
@@ -198,15 +206,6 @@ def _status_tag(owned: int, needed: int) -> str:
     elif owned > 0:
         return f'<span class="tag tag-yellow">partial {owned}/{needed}</span>'
     return f'<span class="tag tag-red">farm {needed - owned}</span>'
-
-
-def _color(owned: int, needed: int) -> str:
-    """Return CSS colour name: green if satisfied, yellow if partial, red if missing."""
-    if owned >= needed:
-        return "green"
-    elif owned > 0:
-        return "yellow"
-    return "red"
 
 
 def _craft_color(owned: int, needed: int) -> str:
@@ -564,18 +563,22 @@ def render_relics_safe(needed, relics) -> str:
 #
 
 
-def render_craft(items_by_un, recipes_by_result, owned, loc_dict) -> str:
-    """Render the Craft tab with search form and no results yet."""
-    content = """
+_CRAFT_TAB_BAR = """
 <div class="tab-bar">
   <a href="/craft" class="active">Item Lookup</a>
   <a href="/weapon-chains">Weapon Chains</a>
-</div>
+</div>"""
+
+
+def render_craft(query: str = "", error: str | None = None) -> str:
+    """Render the Craft tab with the search form and an optional error message."""
+    error_html = f'<p class="red">{html.escape(error)}</p>' if error else ""
+    content = f"""{_CRAFT_TAB_BAR}
 <form method="get" action="/craft" style="margin-bottom:16px">
   <input type="text" name="q" placeholder="Search items..."
-         value="" style="width:300px">
+         value="{html.escape(query, quote=True)}" style="width:300px">
   <button type="submit">Search</button>
-</form>"""
+</form>{error_html}"""
     return _page("Craft", content, "craft")
 
 
@@ -594,12 +597,7 @@ def render_craft_result(
         un = m.get("uniqueName", "")
         name = resolve_name(m.get("name", ""), loc_dict) or un.split("/")[-1]
         cat = m.get("category", "")
-        lines.append(f"""<details>
-<summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
-<div class="tree">{_tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)}</div>""")  # noqa: E501
-        req, craft = None, None
-        from warframe_profile.model.craft_model import resolve_tree
-
+        tree = _tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)
         req, craft = resolve_tree(
             un,
             1,
@@ -609,20 +607,16 @@ def render_craft_result(
             loc_dict,
             max_depth=depth,
         )
-        lines.append(_craft_summary_html(req, craft))
-        lines.append("</details>")
+        lines.append(f"""<details>
+<summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
+<div class="tree">{tree}</div>{_craft_summary_html(req, craft)}</details>""")
 
-    tab_bar = """
-<div class="tab-bar">
-  <a href="/craft" class="active">Item Lookup</a>
-  <a href="/weapon-chains">Weapon Chains</a>
-</div>"""
     content = (
-        tab_bar
+        _CRAFT_TAB_BAR
         + f"""
 <form method="get" action="/craft" style="margin-bottom:16px">
   <input type="text" name="q" placeholder="Search items..."
-         value="{query}" style="width:300px">
+         value="{html.escape(query, quote=True)}" style="width:300px">
   <button type="submit">Search</button>
 </form>
 <div>{"".join(lines)}</div>"""
@@ -673,12 +667,9 @@ def render_weapon_chains(
         else:
             names.append(un_to_name(final_un))
 
-        parts.append(f"""<details>
-<summary>{" → ".join(names)}</summary>
-<div class="tree">{_tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)}</div>""")  # noqa: E501
-        req, craft = None, None
-        from warframe_profile.model.craft_model import resolve_tree
-
+        tree = _tree_html(
+            final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5
+        )
         req, craft = resolve_tree(
             final_un,
             1,
@@ -688,8 +679,9 @@ def render_weapon_chains(
             loc_dict,
             max_depth=5,
         )
-        parts.append(_craft_summary_html(req, craft))
-        parts.append("</details>")
+        parts.append(f"""<details>
+<summary>{" → ".join(names)}</summary>
+<div class="tree">{tree}</div>{_craft_summary_html(req, craft)}</details>""")
 
     parts.append(_craft_summary_html(all_requirements, all_craftables))
 

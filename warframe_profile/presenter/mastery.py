@@ -366,67 +366,54 @@ def _max_xp_for_item(item: dict) -> int:
     return 450_000
 
 
-def _item_xp(inv: dict, path: str) -> int:
-    """Return the cumulative XP recorded for *path* across the inventory.
+def _build_xp_index(inv: dict) -> dict[str, int]:
+    """Build a ``lowercased item path -> XP`` index in a single pass.
 
-    Checks ``XPInfo`` first (canonical, survives selling), then falls
-    back to any equipment slot with an ``XP`` field.
+    ``XPInfo`` entries are canonical (they survive selling); the inventory
+    walk only fills in paths that ``XPInfo`` does not cover.
     """
+    xp: dict[str, int] = {}
+
     for entry in inv.get("XPInfo") or []:
-        if (entry.get("ItemType") or "").lower() == path:
-            return entry.get("XP") or 0
+        path = (entry.get("ItemType") or "").lower()
+        if path:
+            xp.setdefault(path, entry.get("XP") or 0)
 
     def _walk(obj):
         if isinstance(obj, dict):
-            if (obj.get("ItemType") or "").lower() == path and obj.get("XP"):
-                return obj["XP"]
+            path = (obj.get("ItemType") or "").lower()
+            value = obj.get("XP")
+            if path and value and path not in xp:
+                xp[path] = value
             for v in obj.values():
-                result = _walk(v)
-                if result:
-                    return result
+                _walk(v)
         elif isinstance(obj, list):
             for v in obj:
-                result = _walk(v)
-                if result:
-                    return result
-        return 0
+                _walk(v)
 
-    return _walk(inv)
+    _walk(inv)
+    return xp
 
 
-def _modular_features(inv: dict, component_path: str) -> int | None:
-    """Return the ``Features`` bitmask of the modular weapon using *component_path*.
-
-    Searches inventory sections that can hold modular or pet items for an item
-    whose ``ModularParts`` list contains *component_path*, or whose ``ItemType``
-    matches it directly (for companion pets that are themselves masterable).
-
-    The ``Features`` field is a bitmask whose lower bits are:
-
-    * ``1``  — Orokin Catalyst / Reactor installed
-    * ``2``  — Forma applied
-    * ``4``  — (unknown / unused in this data)
-    * ``8``  — **Gilded** (modular items — required for MR)
-    """
-    needle = component_path.lower()
-
+def _build_modular_features_index(inv: dict) -> dict[str, int | None]:
+    """Build a ``component path -> Features bitmask`` index in a single pass."""
+    features: dict[str, int | None] = {}
     for sec in _MODULAR_SECTIONS:
         for item in inv.get(sec) or []:
             if not isinstance(item, dict):
                 continue
-            # Match via ModularParts (amp prisms, zaw strikes, kitgun
-            # chambers, MOA heads, K-drive parts).
             parts = item.get("ModularParts") or []
-            if any(p.lower() == needle for p in parts):
-                return item.get("Features")
+            for part in parts:
+                features.setdefault(part.lower(), item.get("Features"))
             # Direct ItemType match: only for items that have ModularParts
             # (companion pets like Predasites / Vulpaphylas / MOAs).  Regular
             # pets, weapons and K-drives don't have ModularParts and should
             # never be subject to a gilding check.
-            if item.get("ModularParts") and (item.get("ItemType") or "").lower() == needle:
-                return item.get("Features")
-
-    return None
+            if parts:
+                item_type = (item.get("ItemType") or "").lower()
+                if item_type:
+                    features.setdefault(item_type, item.get("Features"))
+    return features
 
 
 # ---------------------------------------------------------------------------
@@ -499,15 +486,16 @@ def _filter_masterable_items(db):
 def _classify_mastery_item(
     item: dict,
     ever_leveled: set,
-    inv: dict,
+    xp_by_path: dict[str, int],
+    modular_features: dict[str, int | None],
 ) -> tuple[str, int]:  # ("unmastered"|"in_progress"|"mastered", tier_index)
     """Classify one masterable item and return ``(bucket, tier_index)``."""
     un = item["uniqueName"].lower()
     if un not in ever_leveled:
         return "unmastered", _tier_index(item)
-    xp = _item_xp(inv, un)
+    xp = xp_by_path.get(un, 0)
     max_xp = _max_xp_for_item(item)
-    features = _modular_features(inv, item["uniqueName"])
+    features = modular_features.get(item["uniqueName"].lower())
     if features is not None and (features & 8) == 0:
         return "in_progress", _tier_index(item)
     if xp >= max_xp:
@@ -559,6 +547,8 @@ def analyze_mastery(
         blueprint is already owned.
     """
     ever_leveled = _build_ever_leveled(inv)
+    xp_by_path = _build_xp_index(inv)
+    modular_features = _build_modular_features_index(inv)
     masterable = _filter_masterable_items(db)
 
     owned = build_owned(inv, db.recipes)
@@ -569,7 +559,7 @@ def analyze_mastery(
     in_progress: list[tuple[dict, int]] = []
 
     for item in masterable:
-        bucket, t_idx = _classify_mastery_item(item, ever_leveled, inv)
+        bucket, t_idx = _classify_mastery_item(item, ever_leveled, xp_by_path, modular_features)
         if bucket == "unmastered":
             unmastered.append((item, t_idx))
         elif bucket == "in_progress":

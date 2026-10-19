@@ -17,6 +17,7 @@ This module is the **terminal view** in the MVP pattern.  Web rendering
 lives in :mod:`warframe_profile.view.web.templates`.
 """
 
+import math
 from collections import defaultdict
 
 from prettytable import PrettyTable, TableStyle
@@ -62,6 +63,20 @@ def _build_sell_dict(
     return sell
 
 
+def _new_table(columns: list[tuple[str, str]], title: str | None = None) -> PrettyTable:
+    """Create a :class:`PrettyTable` from ``(column, alignment)`` pairs.
+
+    Every report table is built this way: field names, ``DEFAULT`` style and
+    per-column alignment in one call.
+    """
+    t = PrettyTable(title=title)
+    t.set_style(TableStyle.DEFAULT)
+    t.field_names = [name for name, _ in columns]
+    for name, align in columns:
+        t.align[name] = align
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -92,11 +107,10 @@ def _print_missing_primes_section(missing) -> None:
     """Print the 'Missing Prime Items' table."""
     if not missing:
         return
-    t = PrettyTable(title="Missing Prime Items (no parts owned)")
-    t.field_names = ["Name", "Category", "MR"]
-    t.align["Name"] = "l"
-    t.align["Category"] = "l"
-    t.align["MR"] = "r"
+    t = _new_table(
+        [("Name", "l"), ("Category", "l"), ("MR", "r")],
+        title="Missing Prime Items (no parts owned)",
+    )
     for m in sorted(missing, key=lambda x: (x.category, x.name)):
         t.add_row([m.name, m.category, m.mastery_req or ""])
     print(t)
@@ -127,13 +141,16 @@ def _print_excess_parts_section(relevant, n_silent) -> None:
     if not relevant:
         return
     print()
-    t = PrettyTable(title="Excess Prime Parts")
-    t.field_names = ["Item", "Copies Needed", "Parts Missing", "Excess Parts", "Ducats"]
-    t.align["Item"] = "l"
-    t.align["Copies Needed"] = "r"
-    t.align["Parts Missing"] = "l"
-    t.align["Excess Parts"] = "l"
-    t.align["Ducats"] = "r"
+    t = _new_table(
+        [
+            ("Item", "l"),
+            ("Copies Needed", "r"),
+            ("Parts Missing", "l"),
+            ("Excess Parts", "l"),
+            ("Ducats", "r"),
+        ],
+        title="Excess Prime Parts",
+    )
 
     for i in relevant:
         nb = i.needed_builds
@@ -155,12 +172,10 @@ def _print_sell_ducats_section(items, total_safe) -> None:
     if not sell:
         return
     print()
-    t = PrettyTable(title="Sell for Ducats")
-    t.field_names = ["Part", "Qty", "Duc", "Total"]
-    t.align["Part"] = "l"
-    t.align["Qty"] = "r"
-    t.align["Duc"] = "r"
-    t.align["Total"] = "r"
+    t = _new_table(
+        [("Part", "l"), ("Qty", "r"), ("Duc", "r"), ("Total", "r")],
+        title="Sell for Ducats",
+    )
 
     sorted_items = sorted(sell.items(), key=lambda x: (x[0][0], x[0][1]))
     for idx, ((_item_name, _part_name), info) in enumerate(sorted_items):
@@ -207,12 +222,10 @@ def print_safe_relics(relics: list[RelicInfo]) -> None:
         return
 
     print()
-    t = PrettyTable(title="Safe-to-Spam Relics (all rewards already owned)")
-    t.field_names = ["Relic", "Tier", "Count", "Vaulted"]
-    t.align["Relic"] = "l"
-    t.align["Tier"] = "l"
-    t.align["Count"] = "r"
-    t.align["Vaulted"] = "l"
+    t = _new_table(
+        [("Relic", "l"), ("Tier", "l"), ("Count", "r"), ("Vaulted", "l")],
+        title="Safe-to-Spam Relics (all rewards already owned)",
+    )
 
     for r in safe:
         t.add_row([r.name, r.tier, r.count, "Yes" if r.vaulted else "No"])
@@ -235,13 +248,16 @@ def print_needed_drops(needed: list[NeededPart]) -> None:
         return
 
     print()
-    t = PrettyTable(title="Needed Prime Parts & Relic Drops")
-    t.field_names = ["Part", "Item", "Need", "Duc", "Owned Relic Drops"]
-    t.align["Part"] = "l"
-    t.align["Item"] = "l"
-    t.align["Need"] = "r"
-    t.align["Duc"] = "r"
-    t.align["Owned Relic Drops"] = "l"
+    t = _new_table(
+        [
+            ("Part", "l"),
+            ("Item", "l"),
+            ("Need", "r"),
+            ("Duc", "r"),
+            ("Owned Relic Drops", "l"),
+        ],
+        title="Needed Prime Parts & Relic Drops",
+    )
 
     for n in needed:
         need_str = f"x{n.missing}"
@@ -268,14 +284,15 @@ def section_sellable_equipment(sellable: list[SellableEquipment]) -> None:
     """Print the market-re-buyable equipment table."""
     if not sellable:
         return
-    t = PrettyTable(
+    t = _new_table(
+        [
+            ("Name", "l"),
+            ("Category", "l"),
+            ("Buy Type", "l"),
+            ("Rarest Material", "l"),
+        ],
         title="Market Re-Buyable Equipment (safe to sell)",
     )
-    t.field_names = ["Name", "Category", "Buy Type", "Rarest Material"]
-    t.align["Name"] = "l"
-    t.align["Category"] = "l"
-    t.align["Buy Type"] = "l"
-    t.align["Rarest Material"] = "l"
     for s in sellable:
         rc = s.rare_component or "\u2014"
         t.add_row([s.name, s.category, s.buy_type, rc])
@@ -287,13 +304,16 @@ def section_excess_blueprints_components(excess: list[ExcessItem]) -> None:
     """Print the excess blueprints and components table."""
     if not excess:
         return
-    t = PrettyTable(title="Excess Blueprints & Components (safe to sell)")
-    t.field_names = ["Name", "Type", "Owned", "Sell", "Crafts Into"]
-    t.align["Name"] = "l"
-    t.align["Type"] = "l"
-    t.align["Owned"] = "r"
-    t.align["Sell"] = "r"
-    t.align["Crafts Into"] = "l"
+    t = _new_table(
+        [
+            ("Name", "l"),
+            ("Type", "l"),
+            ("Owned", "r"),
+            ("Sell", "r"),
+            ("Crafts Into", "l"),
+        ],
+        title="Excess Blueprints & Components (safe to sell)",
+    )
     for e in excess:
         t.add_row([e.name, e.item_type, e.owned, e.sell, e.builds])
     print(t)
@@ -327,11 +347,10 @@ def section_items_with_owned_prime(
 
     rows.sort(key=lambda r: (r["category"], r["name"]))
 
-    t = PrettyTable(title="Items to Sell (Own Prime Variant)")
-    t.field_names = ["Item", "Category", "Prime Variant Owned"]
-    t.align["Item"] = "l"
-    t.align["Category"] = "l"
-    t.align["Prime Variant Owned"] = "l"
+    t = _new_table(
+        [("Item", "l"), ("Category", "l"), ("Prime Variant Owned", "l")],
+        title="Items to Sell (Own Prime Variant)",
+    )
     for r in rows:
         t.add_row([r["name"], r["category"], r["prime_name"]])
     print(t)
@@ -382,8 +401,6 @@ def _compute_print_crafts(
     depth: int,
 ) -> tuple[int, int]:
     """Return ``(num_crafts, effective_crafts)`` for display."""
-    import math
-
     num_crafts = max(1, math.ceil(quantity / build_qty))
     if depth > 0:
         remaining_qty = max(0, quantity - owned_qty)
@@ -537,26 +554,14 @@ def print_craft_summary(requirements: dict, craftables: dict) -> None:
     craft_list = [c for c in craft_list if c["quantity"] > c["owned"]]
     if craft_list:
         print("\u2500\u2500 Crafting List \u2500\u2500")
-        ct = PrettyTable()
-        ct.set_style(TableStyle.DEFAULT)
-        ct.field_names = ["Item", "Needed", "Owned", "Crafts"]
-        ct.align["Item"] = "l"
-        ct.align["Needed"] = "r"
-        ct.align["Owned"] = "r"
-        ct.align["Crafts"] = "r"
+        ct = _new_table([("Item", "l"), ("Needed", "r"), ("Owned", "r"), ("Crafts", "r")])
         for c in craft_list:
             ct.add_row([c["name"], c["quantity"], c["owned"], c["num_crafts"]])
         print(ct)
         print()
 
     print("\u2500\u2500 Raw Materials \u2500\u2500")
-    t = PrettyTable()
-    t.set_style(TableStyle.DEFAULT)
-    t.field_names = ["Material", "Needed", "Owned", "Status"]
-    t.align["Material"] = "l"
-    t.align["Needed"] = "r"
-    t.align["Owned"] = "r"
-    t.align["Status"] = "r"
+    t = _new_table([("Material", "l"), ("Needed", "r"), ("Owned", "r"), ("Status", "r")])
     for info in sorted(requirements.values(), key=lambda x: x["name"]):
         missing = max(0, info["quantity"] - info["owned"])
         status = f"FARM {missing}" if missing > 0 else "\u2713"
@@ -566,13 +571,7 @@ def print_craft_summary(requirements: dict, craftables: dict) -> None:
     if farm_items:
         print()
         print("\u2500\u2500 Farming List \u2500\u2500")
-        ft = PrettyTable()
-        ft.set_style(TableStyle.DEFAULT)
-        ft.field_names = ["Material", "Needed", "Owned", "To Farm"]
-        ft.align["Material"] = "l"
-        ft.align["Needed"] = "r"
-        ft.align["Owned"] = "r"
-        ft.align["To Farm"] = "r"
+        ft = _new_table([("Material", "l"), ("Needed", "r"), ("Owned", "r"), ("To Farm", "r")])
         for fi in farm_items:
             ft.add_row([fi["name"], fi["needed"], fi["owned"], fi["missing"]])
         print(ft)

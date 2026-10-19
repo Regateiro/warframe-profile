@@ -13,6 +13,7 @@ The main entry point is :func:`analyze`, which produces an
 :class:`AnalysisResult` dataclass consumed by the view layer.
 """
 
+import bisect
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -219,7 +220,7 @@ class AnalysisResult:
 #   - needed_builds: total builds required = (0 if owned else 1) + extras
 
 
-def _compute_owned_finished(
+def compute_owned_finished(
     inventory: dict,
     equipment_sections: list[str],
     mastered: set[str] | None = None,
@@ -241,7 +242,7 @@ def _compute_owned_finished(
     return result
 
 
-def _compute_extra_builds(
+def compute_extra_builds(
     prime_map: dict[str, dict],
     owned: dict[str, int],
     owned_finished: set[str],
@@ -452,6 +453,8 @@ def _build_not_needed_part_names(
     owned: dict[str, int],
     equipment_sections: list[str],
     mastered: set[str] | None = None,
+    owned_finished: set[str] | None = None,
+    extra_builds: dict[str, int] | None = None,
 ) -> set[str]:
     """Build a set of reward-style names for parts the player does NOT need.
 
@@ -464,8 +467,16 @@ def _build_not_needed_part_names(
     are either crafting materials (e.g. Orokin Cell), base weapons used as
     akimbo ingredients, or non-Prime items misclassified as Prime.
     """
-    owned_finished = _compute_owned_finished(inventory, equipment_sections, mastered)
-    extra_builds = _compute_extra_builds(prime_map, owned, owned_finished)
+    owned_finished = (
+        owned_finished
+        if owned_finished is not None
+        else compute_owned_finished(inventory, equipment_sections, mastered)
+    )
+    extra_builds = (
+        extra_builds
+        if extra_builds is not None
+        else compute_extra_builds(prime_map, owned, owned_finished)
+    )
 
     not_needed: set[str] = set()
 
@@ -556,13 +567,21 @@ def build_relics_map(
     owned: dict[str, int],
     equipment_sections: list[str],
     mastered: set[str] | None = None,
+    owned_finished: set[str] | None = None,
+    extra_builds: dict[str, int] | None = None,
 ) -> list[RelicInfo]:
     """Cross-reference owned relics against needed prime parts."""
     all_relics = [i for i in items if i.get("category") == "Relics"]
     relic_by_un: dict[str, dict] = {r["uniqueName"]: r for r in all_relics}
     owned_relics = _build_owned_relics(inventory, all_relics)
     not_needed = _build_not_needed_part_names(
-        prime_map, inventory, owned, equipment_sections, mastered=mastered
+        prime_map,
+        inventory,
+        owned,
+        equipment_sections,
+        mastered=mastered,
+        owned_finished=owned_finished,
+        extra_builds=extra_builds,
     )  # noqa: E501
 
     results: list[RelicInfo] = []
@@ -687,10 +706,20 @@ def build_needed_drops(
     owned: dict[str, int],
     equipment_sections: list[str],
     mastered: set[str] | None = None,
+    owned_finished: set[str] | None = None,
+    extra_builds: dict[str, int] | None = None,
 ) -> list[NeededPart]:
     """Identify needed prime parts and which owned relics can drop them."""
-    owned_finished = _compute_owned_finished(inventory, equipment_sections, mastered)
-    extra_builds = _compute_extra_builds(prime_map, owned, owned_finished)
+    owned_finished = (
+        owned_finished
+        if owned_finished is not None
+        else compute_owned_finished(inventory, equipment_sections, mastered)
+    )
+    extra_builds = (
+        extra_builds
+        if extra_builds is not None
+        else compute_extra_builds(prime_map, owned, owned_finished)
+    )
     all_relics = [i for i in items if i.get("category") == "Relics"]
     reward_index = _build_reward_index(inventory, all_relics)
 
@@ -756,6 +785,20 @@ def _get_rarest_component(item_data: dict) -> str | None:
     return rarest if rarest_tier > 0 else None
 
 
+def build_ingredient_to_results(recipes: dict) -> dict[str, set[str]]:
+    """Build a reverse index: ingredient ``ItemType`` → set of result types."""
+    index: dict[str, set[str]] = defaultdict(set)
+    for recipe_data in recipes.values():
+        result_type = recipe_data.get("resultType", "")
+        if not result_type:
+            continue
+        for ingredient in recipe_data.get("ingredients", []):
+            item_type = ingredient.get("ItemType", "")
+            if item_type:
+                index[item_type].add(result_type)
+    return index
+
+
 def build_ingredient_index_craftable_to_owned(
     recipes: dict,
     items: list[dict],
@@ -794,16 +837,12 @@ def build_ingredient_index_craftable_to_owned(
     # Build reverse indices: resultType → recipe_data and
     # ingredient → set of resultTypes.
     result_to_recipe: dict[str, dict] = {}
-    ingredient_to_results: dict[str, set[str]] = defaultdict(set)
-
     for recipe_data in recipes.values():
-        rt = recipe_data.get("resultType", "")
-        if rt:
-            result_to_recipe[rt] = recipe_data
-        for ingredient in recipe_data.get("ingredients", []):
-            item_type = ingredient.get("ItemType", "")
-            if item_type and rt:
-                ingredient_to_results[item_type].add(rt)
+        result_type = recipe_data.get("resultType", "")
+        if result_type:
+            result_to_recipe[result_type] = recipe_data
+
+    ingredient_to_results = build_ingredient_to_results(recipes)
 
     exclude: set[str] = set()
 
@@ -919,15 +958,7 @@ def find_excess_blueprints_and_components(
         A list of :class:`ExcessItem` sorted by name.
     """
 
-    ingredient_to_results: dict[str, set[str]] = defaultdict(set)
-    for recipe_data in recipes.values():
-        rt = recipe_data.get("resultType", "")
-        if not rt:
-            continue
-        for ingredient in recipe_data.get("ingredients", []):
-            item_type = ingredient.get("ItemType", "")
-            if item_type:
-                ingredient_to_results[item_type].add(rt)
+    ingredient_to_results: dict[str, set[str]] = build_ingredient_to_results(recipes)
 
     excess: list[ExcessItem] = []
 
@@ -973,8 +1004,6 @@ def _item_display_name(
     loc_dict: dict,
 ) -> str:
     """Return the human-readable name for an item uniqueName."""
-    from warframe_profile.model.craft_model import resolve_name
-
     item = items_by_un.get(normalize_path(item_un))
     if item:
         name = resolve_name(item.get("name", ""), loc_dict)
@@ -1063,15 +1092,34 @@ def build_regular_to_prime_map(items: list[dict]) -> dict[str, dict]:
     Prime items by ``(name, category)``, then for each non-Prime item,
     it searches for a matching Prime entry with the same name (or a name
     that starts with the non-Prime name, e.g. ``"Braton"`` →
-    ``"Braton Prime"``).
+    ``"Braton Prime"``).  Prefix candidates are found with a binary
+    search over per-category sorted Prime names.
 
     Returns:
         ``{non_prime_un: {"prime_name": ..., "prime_un": ...}}``.
     """
     by_name_cat: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    prime_names_by_cat: dict[str, list[str]] = defaultdict(list)
     for item in items:
         if item.get("isPrime") is True:
-            by_name_cat[(item["name"], item.get("category", ""))].append(item)
+            key = (item["name"], item.get("category", ""))
+            by_name_cat[key].append(item)
+            prime_names_by_cat[key[1]].append(key[0])
+
+    for names in prime_names_by_cat.values():
+        names.sort()
+
+    def _prefix_keys(name: str, cat: str) -> list[str]:
+        """Return sorted Prime names in *cat* that start with *name*."""
+        names = prime_names_by_cat.get(cat)
+        if not names:
+            return []
+        i = bisect.bisect_left(names, name)
+        found: list[str] = []
+        while i < len(names) and names[i].startswith(name):
+            found.append(names[i])
+            i += 1
+        return found
 
     reg_to_prime: dict[str, dict] = {}
     for item in items:
@@ -1081,9 +1129,9 @@ def build_regular_to_prime_map(items: list[dict]) -> dict[str, dict]:
         cat = item.get("category", "")
         matches = by_name_cat.get((name, cat), [])
         if not matches:
-            candidates = [k for k in by_name_cat if k[0].startswith(name) and k[1] == cat]
+            candidates = _prefix_keys(name, cat)
             if len(candidates) == 1:
-                matches = by_name_cat[candidates[0]]
+                matches = by_name_cat[(candidates[0], cat)]
         if matches:
             p = matches[0]
             reg_to_prime[item["uniqueName"]] = {
@@ -1185,14 +1233,14 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
     primes: dict[str, dict] = {}
     for item in items:
         un = item.get("uniqueName", "")
+        name_lower = item.get("name", "").lower()
         # Quick reject: name or uniqueName must contain "Prime".
-        if "Prime" not in un and "prime" not in item.get("name", "").lower():
+        if "Prime" not in un and "prime" not in name_lower:
             continue
         tags = item.get("tags", []) or []
         cat = item.get("category", "")
-        if not any(t in str(tags) or t in cat for t in _PRIME_TAGS):
-            if "prime" not in item.get("name", "").lower():
-                continue
+        if not any(t in tags or t in cat for t in _PRIME_TAGS) and "prime" not in name_lower:
+            continue
 
         # Collect tradable components, deduplicating by uniqueName.
         comps = item.get("components", [])
@@ -1425,6 +1473,9 @@ def analyze(
     equipment_sections: list[str],
     mastered: set[str] | None = None,
     recipes: dict | None = None,
+    owned: dict[str, int] | None = None,
+    owned_finished: set[str] | None = None,
+    extra_builds: dict[str, int] | None = None,
 ) -> AnalysisResult:
     """Cross-reference inventory against prime_map.
 
@@ -1442,9 +1493,17 @@ def analyze(
     2. Per-item analysis — for each Prime, compute owned/needed/surplus/missing
        for every tradable component, and aggregate ducat values.
     """
-    owned = build_owned(inventory, recipes=recipes)
-    owned_finished = _compute_owned_finished(inventory, equipment_sections, mastered)
-    extra_builds = _compute_extra_builds(prime_map, owned, owned_finished)
+    owned = owned if owned is not None else build_owned(inventory, recipes=recipes)
+    owned_finished = (
+        owned_finished
+        if owned_finished is not None
+        else compute_owned_finished(inventory, equipment_sections, mastered)
+    )
+    extra_builds = (
+        extra_builds
+        if extra_builds is not None
+        else compute_extra_builds(prime_map, owned, owned_finished)
+    )
     comp_to_bp = build_component_blueprint_map(recipes or {}, prime_map)
 
     results: list[ItemResult] = []
