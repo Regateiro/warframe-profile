@@ -26,7 +26,7 @@ install: ## Install the project into the Poetry virtualenv (dev tools included)
 	$(POETRY) install --extras dev
 
 install-user: ## Install the `warframe` command for the current user via pipx (editable)
-	$(PIPX) install --editable .
+	$(PIPX) install --editable --force .
 
 uninstall-user: ## Remove the user-level `warframe` command
 	$(PIPX) uninstall warframe-profile

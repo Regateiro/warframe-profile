@@ -29,8 +29,39 @@ from warframe_profile.model.inventory import load_inventory_with_fallback
 #: Base URL for Digital Extremes' public export files.
 DE_BASE = "https://browse.wf/warframe-public-export-plus/"
 
-#: WFCD All.json URL (community-maintained item database).
-WFCD_URL = "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/All.json"
+#: Base URL for WFCD's per-category JSON files (community-maintained item database).
+WFCD_BASE = "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/"
+
+#: WFCD category files. Upstream no longer publishes a combined ``All.json``,
+#: so we download each category and concatenate them ourselves.
+WFCD_FILES = [
+    "Arcanes.json",
+    "Arch-Gun.json",
+    "Arch-Melee.json",
+    "Archwing.json",
+    "Components.json",
+    "Enemy.json",
+    "Fish.json",
+    "Gear.json",
+    "Glyphs.json",
+    "Honoria.json",
+    "Melee.json",
+    "Misc.json",
+    "Mods.json",
+    "Node.json",
+    "Pets.json",
+    "Primary.json",
+    "Quests.json",
+    "Railjack.json",
+    "Relics.json",
+    "Resources.json",
+    "Secondary.json",
+    "SentinelWeapons.json",
+    "Sentinels.json",
+    "Sigils.json",
+    "Skins.json",
+    "Warframes.json",
+]
 
 #: Mapping of DE export filenames → labels in the combined dict.
 DE_FILES = {
@@ -82,6 +113,18 @@ def download_json(url: str) -> dict | list:
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())
+
+
+def download_wfcd_items() -> list[dict]:
+    """Download every WFCD category file and concatenate them into one list."""
+    items: list[dict] = []
+    for fname in WFCD_FILES:
+        data = download_json(WFCD_BASE + fname)
+        if isinstance(data, list):
+            items.extend(data)
+        elif isinstance(data, dict):
+            items.extend(data.values())
+    return items
 
 
 def _strip_drops(components: list[dict]) -> list[dict]:
@@ -235,7 +278,7 @@ def main(args=None) -> None:
         1. Determine output path (default: ``data/export_db.json``).
         2. Optionally remove old cache (``--refresh-items``).
         3. Download all DE export JSON files from ``browse.wf``.
-        4. Download WFCD ``All.json`` from GitHub.
+        4. Download WFCD items (one JSON file per category) from GitHub.
         5. Merge both sources via :func:`merge`.
         6. Write merged result to disk.
         7. Optionally refresh player inventory (``--refresh``).
@@ -270,7 +313,7 @@ def main(args=None) -> None:
 
     # Download WFCD items.
     print("Downloading WFCD items ...", file=sys.stderr)
-    wfcd = download_json(WFCD_URL)
+    wfcd = download_wfcd_items()
     print(f"  {len(wfcd)} items", file=sys.stderr)
 
     # Merge.
