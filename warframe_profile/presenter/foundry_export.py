@@ -89,8 +89,7 @@ def main(args) -> None:
     if getattr(args, "steel_xp", None) is not None:
         print(
             "  Steel Path mastery: {} pts (from --steel-xp {})".format(
-                settings["steelMissionCount"] * 63
-                + settings["steelJunctionCount"] * 1000,
+                settings["steelMissionCount"] * 63 + settings["steelJunctionCount"] * 1000,
                 args.steel_xp,
             )
         )
@@ -142,8 +141,7 @@ if __name__ == "__main__":
         "--steel-xp",
         type=int,
         default=None,
-        help="Total Steel Path mastery XP gained; converted to steel mission/"
-        "junction counts",
+        help="Total Steel Path mastery XP gained; converted to steel mission/junction counts",
     )
     args = parser.parse_args()
     try:

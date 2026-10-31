@@ -313,17 +313,11 @@ def _derive_settings(inventory: dict) -> dict:
     ``steelMissionCount`` / ``steelJunctionCount`` default to 0 (the caller
     can override them).
     """
-    tags = {
-        str(m.get("Tag", ""))
-        for m in (inventory.get("Missions") or [])
-        if m.get("Tag")
-    }
+    tags = {str(m.get("Tag", "")) for m in (inventory.get("Missions") or []) if m.get("Tag")}
     sol_nodes = {t for t in tags if t.startswith("SolNode")}
     junctions = {t for t in tags if t.endswith("Junction")}
     skills = inventory.get("PlayerSkills") or {}
-    intrinsics = sum(
-        value for key, value in skills.items() if key.startswith("LPS_")
-    )
+    intrinsics = sum(value for key, value in skills.items() if key.startswith("LPS_"))
     return {
         "missionCount": min(_SETTINGS_LIMITS["missionCount"], len(sol_nodes)),
         "junctionCount": min(_SETTINGS_LIMITS["junctionCount"], len(junctions)),
@@ -405,17 +399,13 @@ def _item_mastery_points(db: ExportDB, items_data: dict[str, dict]) -> int:
     """
     categories_by_key = _db_categories_by_foundry_key(db)
     return sum(
-        6000
-        if categories_by_key.get(key, set()) & _MASTERY_6000_CATEGORY_SET
-        else 3000
+        6000 if categories_by_key.get(key, set()) & _MASTERY_6000_CATEGORY_SET else 3000
         for key, entry in items_data.items()
         if entry.get("mastered")
     )
 
 
-def foundry_mastery_points(
-    db: ExportDB, items_data: dict[str, dict], settings: dict
-) -> int:
+def foundry_mastery_points(db: ExportDB, items_data: dict[str, dict], settings: dict) -> int:
     """Total mastery points the Foundry would compute for this export."""
     return (
         _item_mastery_points(db, items_data)
@@ -439,9 +429,7 @@ def mastery_rank(points: int) -> int:
     return rank - 1
 
 
-def build_foundry_export(
-    db: ExportDB, inventory: dict, settings: dict | None = None
-) -> dict:
+def build_foundry_export(db: ExportDB, inventory: dict, settings: dict | None = None) -> dict:
     """Build the Warframe Foundry import dict from *db* and *inventory*.
 
     Flow:

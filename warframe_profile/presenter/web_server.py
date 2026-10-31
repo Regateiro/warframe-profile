@@ -173,9 +173,7 @@ def _ensure_owned_state():
     """Build ``owned_finished`` / ``extra_builds`` once per inventory load."""
     if _cache.owned_finished is None or _cache.extra_builds is None:
         _ensure_prime_map()
-        _cache.owned_finished = compute_owned_finished(
-            _cache.inventory, EQUIPMENT_SECTIONS, None
-        )
+        _cache.owned_finished = compute_owned_finished(_cache.inventory, EQUIPMENT_SECTIONS, None)
         _cache.extra_builds = compute_extra_builds(
             _cache.prime_map, _cache.owned, _cache.owned_finished
         )
@@ -294,9 +292,7 @@ def _ensure_foundry_export(settings: dict | None):
     with _cache_lock:
         if _cache.foundry_export is not None and _cache.foundry_settings == key:
             return _cache.foundry_export
-        _cache.foundry_export = build_foundry_export(
-            _cache.db, _cache.inventory, settings=settings
-        )
+        _cache.foundry_export = build_foundry_export(_cache.db, _cache.inventory, settings=settings)
         _cache.foundry_settings = key
         return _cache.foundry_export
 

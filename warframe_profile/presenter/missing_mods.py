@@ -23,9 +23,19 @@ from warframe_profile.model.inventory import (
 from warframe_profile.model.utils import normalize_path
 
 # Requiem mod names — drop from Kuva Lich / Sister / Coda murmurs
-_REQUIEM_NAMES = frozenset({
-    "Lohk", "Xata", "Jahu", "Khra", "Vome", "Fass", "Netra", "Oull", "Ris",
-})
+_REQUIEM_NAMES = frozenset(
+    {
+        "Lohk",
+        "Xata",
+        "Jahu",
+        "Khra",
+        "Vome",
+        "Fass",
+        "Netra",
+        "Oull",
+        "Ris",
+    }
+)
 
 # In-game category display order
 _CATEGORY_ORDER = [
@@ -99,9 +109,19 @@ _AUGMENT_PATH_MARKERS: tuple[str, ...] = ("AugmentCard", "AugmentMod")
 
 #: Keywords used to classify Companion mods as "Beast" type.
 _BEAST_KEYWORDS: tuple[str, ...] = (
-    "Kubrow", "Kavat", "Charger", "Huras", "Sahasa", "Adarza",
-    "Smeeta", "Helminth", "Predasite", "Vulpaphyla", "Moa",
-    "Hound", "Zanuka",
+    "Kubrow",
+    "Kavat",
+    "Charger",
+    "Huras",
+    "Sahasa",
+    "Adarza",
+    "Smeeta",
+    "Helminth",
+    "Predasite",
+    "Vulpaphyla",
+    "Moa",
+    "Hound",
+    "Zanuka",
 )
 
 
@@ -400,11 +420,13 @@ def print_missing_mods_report(
         t.set_style(TableStyle.DEFAULT)
 
         for mod in mods:
-            t.add_row([
-                _clean_mod_name(mod),
-                mod.get("rarity", "?"),
-                _acquisition_hint(mod, drop_data),
-            ])
+            t.add_row(
+                [
+                    _clean_mod_name(mod),
+                    mod.get("rarity", "?"),
+                    _acquisition_hint(mod, drop_data),
+                ]
+            )
 
         print(t)
         print()
@@ -423,6 +445,4 @@ def main(args) -> None:
 
     result = analyze_missing_mods(db, inv)
     owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data = result
-    print_missing_mods_report(
-        owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data
-    )
+    print_missing_mods_report(owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data)

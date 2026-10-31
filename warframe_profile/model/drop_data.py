@@ -15,8 +15,7 @@ from warframe_profile import HTTP_TIMEOUT, USER_AGENT_COMMUNITY
 
 #: URL for mod location data from WFCD drop data repository.
 MOD_LOCATIONS_URL = (
-    "https://raw.githubusercontent.com/WFCD/warframe-drop-data/"
-    "main/data/modLocations.json"
+    "https://raw.githubusercontent.com/WFCD/warframe-drop-data/main/data/modLocations.json"
 )
 
 #: Local cache path.
@@ -102,11 +101,13 @@ def _build_lookup(raw: dict) -> dict[str, list[dict[str, Any]]]:
         mod_name = entry.get("modName", "")
         sources = []
         for enemy in entry.get("enemies", []):
-            sources.append({
-                "enemy": enemy.get("enemyName", "Unknown"),
-                "rarity": enemy.get("rarity", ""),
-                "chance": enemy.get("chance", 0),
-            })
+            sources.append(
+                {
+                    "enemy": enemy.get("enemyName", "Unknown"),
+                    "rarity": enemy.get("rarity", ""),
+                    "chance": enemy.get("chance", 0),
+                }
+            )
         if mod_name:
             lookup.setdefault(mod_name, []).extend(sources)
     return lookup

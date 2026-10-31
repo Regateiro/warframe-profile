@@ -37,17 +37,27 @@ _EASY_CATEGORIES: frozenset[str] = frozenset({"Sentinels", "Pets", "Misc"})
 _ARCHWING_CATEGORIES: frozenset[str] = frozenset({"Archwing", "Arch-Melee"})
 
 #: Categories for warframe-like items that contribute 6,000 MR.
-_FRAME_LIKE_CATEGORIES: frozenset[str] = frozenset({
-    "Warframes", "Archwing", "Sentinels", "Pets",
-})
+_FRAME_LIKE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "Warframes",
+        "Archwing",
+        "Sentinels",
+        "Pets",
+    }
+)
 
 #: Categories for prime weapons (Tier 5).
 _PRIME_WEAPON_CATEGORIES: frozenset[str] = frozenset({"Primary", "Secondary", "Melee"})
 
 #: Categories for market-buyable weapons.
-_MARKET_WEAPON_CATEGORIES: frozenset[str] = frozenset({
-    "Primary", "Secondary", "Melee", "Arch-Gun",
-})
+_MARKET_WEAPON_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "Primary",
+        "Secondary",
+        "Melee",
+        "Arch-Gun",
+    }
+)
 
 #: Inventory sections that can contain modular or pet items (for gilding checks).
 _MODULAR_SECTIONS: tuple[str, ...] = (
@@ -77,18 +87,13 @@ TIERS = [
         "id": "1",
         "label": "Tier 1 — Sentinels, Pets, K-Drives, Kitguns",
         "desc": "Quick wins: buy blueprints from Market or Fortuna, easy materials",
-        "filter": lambda i: (
-            not i.get("isPrime")
-            and i.get("category", "") in _EASY_CATEGORIES
-        ),
+        "filter": lambda i: not i.get("isPrime") and i.get("category", "") in _EASY_CATEGORIES,
     },
     {
         "id": "2",
         "label": "Tier 2 — Archwing & Arch-Melee",
         "desc": "Clan research / Archwing missions / Cephalon Simaris",
-        "filter": lambda i: (
-            not i.get("isPrime") and i.get("category", "") in _ARCHWING_CATEGORIES
-        ),
+        "filter": lambda i: not i.get("isPrime") and i.get("category", "") in _ARCHWING_CATEGORIES,
     },
     {
         "id": "3",
@@ -110,9 +115,7 @@ TIERS = [
         "id": "5",
         "label": "Tier 5 — Prime Weapons (Relics)",
         "desc": "Farm relics / radshares; RNG-dependent",
-        "filter": lambda i: (
-            i.get("isPrime") and i.get("category", "") in _PRIME_WEAPON_CATEGORIES
-        ),
+        "filter": lambda i: i.get("isPrime") and i.get("category", "") in _PRIME_WEAPON_CATEGORIES,
     },
     {
         "id": "6",
@@ -236,21 +239,43 @@ _NAME_SOURCE_MAP: dict[str, str] = {
 }
 
 #: Item names that are daily tribute rewards.
-_DAILY_TRIBUTE_NAMES: frozenset[str] = frozenset({
-    "Azima", "Zenistar", "Zenith", "Sigma & Octantis",
-})
+_DAILY_TRIBUTE_NAMES: frozenset[str] = frozenset(
+    {
+        "Azima",
+        "Zenistar",
+        "Zenith",
+        "Sigma & Octantis",
+    }
+)
 
 #: Item names that are quest rewards.
-_QUEST_REWARD_NAMES: frozenset[str] = frozenset({
-    "Broken War", "Broken Scepter", "Skiajati", "Paracesis",
-    "Nataruk", "Sirocco", "Xoris", "Orvius", "Shedu",
-})
+_QUEST_REWARD_NAMES: frozenset[str] = frozenset(
+    {
+        "Broken War",
+        "Broken Scepter",
+        "Skiajati",
+        "Paracesis",
+        "Nataruk",
+        "Sirocco",
+        "Xoris",
+        "Orvius",
+        "Shedu",
+    }
+)
 
 #: Deimos bounty reward names.
-_DEIMOS_BOUNTY_NAMES: frozenset[str] = frozenset({
-    "Arum Spinosa", "Bubonico", "Catabolyst", "Corthe", "Keratinos",
-    "Pulmonars", "Quassus", "Sporothrix",
-})
+_DEIMOS_BOUNTY_NAMES: frozenset[str] = frozenset(
+    {
+        "Arum Spinosa",
+        "Bubonico",
+        "Catabolyst",
+        "Corthe",
+        "Keratinos",
+        "Pulmonars",
+        "Quassus",
+        "Sporothrix",
+    }
+)
 
 
 def _source_by_tags(item: dict, tags: set[str]) -> str | None:
@@ -609,12 +634,14 @@ def _print_section_table(items: list[dict]) -> None:
     t.align["Source"] = "l"
 
     for item in items:
-        t.add_row([
-            _item_name(item),
-            item.get("category", ""),
-            _item_mr(item),
-            _item_source(item),
-        ])
+        t.add_row(
+            [
+                _item_name(item),
+                item.get("category", ""),
+                _item_mr(item),
+                _item_source(item),
+            ]
+        )
 
     print(t)
     print()
@@ -689,14 +716,18 @@ def print_report(
         f"  {len(in_progress)} in progress"
         f"  {remaining} remaining"
     )
-    total_mr = sum(_item_mr(item) for item, _ in unmastered) + sum(
-        _item_mr(item) for item, _ in in_progress
-    ) + sum(_item_mr(item) for item, _ in br)
+    total_mr = (
+        sum(_item_mr(item) for item, _ in unmastered)
+        + sum(_item_mr(item) for item, _ in in_progress)
+        + sum(_item_mr(item) for item, _ in br)
+    )
     print(f"  ~{total_mr:,} MR available from unmastered items")
     print()
 
     _print_mastery_section(
-        "BLUEPRINT READY", "Blueprint owned \u2014 farm materials to build", br,
+        "BLUEPRINT READY",
+        "Blueprint owned \u2014 farm materials to build",
+        br,
         group_by_tier=False,
     )
     _print_mastery_section("NEVER TOUCHED", "No XP recorded", unmastered)

@@ -12,6 +12,9 @@ dependencies = ["prettytable"]
 [project.optional-dependencies]
 dev = ["ruff"]
 
+[project.scripts]
+warframe = "warframe_profile.__main__:main"
+
 [tool.setuptools]
 packages = ["warframe_profile", "warframe_profile.scripts"]
 

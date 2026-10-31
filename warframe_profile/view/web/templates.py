@@ -134,6 +134,7 @@ def _page(title: str, content: str, active: str) -> str:
 
 def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
     """Render a horizontal subtab bar, marking the *active* tab."""
+
     def _link(key, label, url):
         active_cls = ' class="active"' if key == active else ""
         return f'<a href="{url}"{active_cls}>{label}</a>'
@@ -667,9 +668,7 @@ def render_weapon_chains(
         else:
             names.append(un_to_name(final_un))
 
-        tree = _tree_html(
-            final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5
-        )
+        tree = _tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)
         req, craft = resolve_tree(
             final_un,
             1,

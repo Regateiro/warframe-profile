@@ -61,8 +61,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     craft_sub = sub.add_parser("craft", help="Crafting tree browser")
     craft_sub.add_argument("items", nargs="*", help="Item name(s) to look up")
-    craft_sub.add_argument("--depth", type=int, default=99, help="Max recursion depth for expansion")
-    craft_sub.add_argument("--select", type=int, default=None, help="Select match index when multiple")
+    craft_sub.add_argument(
+        "--depth", type=int, default=99, help="Max recursion depth for expansion"
+    )
+    craft_sub.add_argument(
+        "--select", type=int, default=None, help="Select match index when multiple"
+    )
     craft_sub.add_argument("--interactive", action="store_true", help="Interactive item selection")
     craft_sub.add_argument(
         "--weapon-chain", action="store_true", help="Analyze all weapon upgrade chains"

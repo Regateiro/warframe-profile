@@ -30,6 +30,7 @@ class ItemStatus(str, Enum):
     BUILDABLE = "buildable"
     PARTIAL = "partial"
 
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -40,11 +41,18 @@ _FRAME_CATEGORIES: frozenset[str] = frozenset({"Warframes", "Archwing"})
 
 #: Categories whose prime parts use the "Weapon" naming convention
 #: (part names are used directly without "Blueprint" suffix).
-_WEAPON_PART_CATEGORIES: frozenset[str] = frozenset({
-    "Primary", "Secondary", "Melee",
-    "Sentinels", "SentinelWeapons",
-    "SpaceGuns", "SpaceMelee", "SpaceSuits",
-})
+_WEAPON_PART_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "Primary",
+        "Secondary",
+        "Melee",
+        "Sentinels",
+        "SentinelWeapons",
+        "SpaceGuns",
+        "SpaceMelee",
+        "SpaceSuits",
+    }
+)
 
 #: Weapon categories that can be primed.  Used to identify which items
 #: in the export DB are weapons (as opposed to resources, gear, etc.)
@@ -358,14 +366,26 @@ class RelicInfo:
 #: Component names that are NOT component-level items — they are either the
 #: blueprint itself or weapon sub-parts (e.g. zaw parts) whose names match
 #: generic sub-component terms.  Used by :func:`build_component_blueprint_map`.
-_NON_COMPONENT_NAMES: frozenset[str] = frozenset({
-    "Blueprint", "Ornament", "Handle", "Blade", "Link", "Head",
-})
+_NON_COMPONENT_NAMES: frozenset[str] = frozenset(
+    {
+        "Blueprint",
+        "Ornament",
+        "Handle",
+        "Blade",
+        "Link",
+        "Head",
+    }
+)
 
 #: WFCD categories that are cosmetic (not tradable for ducats).
-_COSMETIC_CATEGORIES: frozenset[str] = frozenset({
-    "Skins", "Glyphs", "Sigils", "Node",
-})
+_COSMETIC_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "Skins",
+        "Glyphs",
+        "Sigils",
+        "Node",
+    }
+)
 
 #: Tags / category substrings used to identify Prime items in the export DB.
 _PRIME_TAGS: frozenset[str] = frozenset({"Prime", "PrimePart"})
