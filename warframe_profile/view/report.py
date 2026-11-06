@@ -93,9 +93,9 @@ def _filter_relevant_items(items: list) -> tuple[list, int]:
     relevant = []
     n_silent = 0
     for i in items:
-        has_surplus = any(p.surplus > 0 for p in i.parts)
-        has_missing = any(p.missing > 0 for p in i.parts)
-        has_ducats = sum(p.surplus * p.ducats for p in i.parts) > 0
+        has_surplus = any(p.surplus > 0 and is_prime_part(p.name) for p in i.parts)
+        has_missing = any(p.missing > 0 and is_prime_part(p.name) for p in i.parts)
+        has_ducats = sum(p.surplus * p.ducats for p in i.parts if is_prime_part(p.name)) > 0
         if i.status == "have_copy" and i.extra_builds == 0 and not has_surplus:
             n_silent += 1
             continue
@@ -158,9 +158,9 @@ def _print_excess_parts_section(relevant, n_silent) -> None:
 
     for i in relevant:
         nb = i.needed_builds
-        missing_parts = [p for p in i.parts if p.missing > 0]
+        missing_parts = [p for p in i.parts if p.missing > 0 and is_prime_part(p.name)]
         missing_str = ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "\u2014"
-        surplus_parts = [p for p in i.parts if p.surplus > 0]
+        surplus_parts = [p for p in i.parts if p.surplus > 0 and is_prime_part(p.name)]
         excess_str = ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "\u2014"
         excess_duc = sum(p.surplus * p.ducats for p in surplus_parts)
         t.add_row([i.name, nb, missing_str, excess_str, excess_duc if excess_duc else ""])
@@ -180,6 +180,15 @@ def part_label(item_name: str, part_name: str) -> str:
     if part_name == item_name or part_name.startswith(item_name + " "):
         return part_name
     return f"{item_name} {part_name}"
+
+
+def is_prime_part(name: str) -> bool:
+    """Whether *name* is an item-specific Prime part (not a shared resource).
+
+    Prime parts carry the item's name (``'Odonata Prime Harness'``); shared
+    crafting resources (``'Orokin Cell'``, ``'Nitain Extract'``) do not.
+    """
+    return "Prime" in name
 
 
 def _print_sell_ducats_section(items, total_safe) -> None:

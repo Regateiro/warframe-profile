@@ -28,7 +28,7 @@ from warframe_profile.model.craft_model import (
     un_to_name,
 )
 from warframe_profile.model.utils import normalize_path
-from warframe_profile.view.report import part_label
+from warframe_profile.view.report import is_prime_part, part_label
 
 GREEN = "#27ae60"
 RED = "#e74c3c"
@@ -444,7 +444,10 @@ def render_ducats_excess(data) -> str:
     relevant = [
         i
         for i in items
-        if (any(p.surplus > 0 for p in i.parts) or any(p.missing > 0 for p in i.parts))
+        if (
+            any(p.surplus > 0 and is_prime_part(p.name) for p in i.parts)
+            or any(p.missing > 0 and is_prime_part(p.name) for p in i.parts)
+        )
     ]
     if relevant:
         rows = "".join(_item_row(i) for i in sorted(relevant, key=lambda x: x.name))
@@ -490,9 +493,9 @@ def render_ducats_sell(data) -> str:
 
 def _item_row(i) -> str:
     """Return one HTML table row for a prime item's excess/missing breakdown."""
-    missing_parts = [p for p in i.parts if p.missing > 0]
+    missing_parts = [p for p in i.parts if p.missing > 0 and is_prime_part(p.name)]
     missing_str = ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "—"
-    surplus_parts = [p for p in i.parts if p.surplus > 0]
+    surplus_parts = [p for p in i.parts if p.surplus > 0 and is_prime_part(p.name)]
     surplus_str = ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "—"
     excess_duc = sum(p.surplus * p.ducats for p in surplus_parts)
     return (
