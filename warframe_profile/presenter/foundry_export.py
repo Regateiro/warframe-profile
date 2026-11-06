@@ -65,8 +65,11 @@ def main(args) -> None:
 
     export = build_foundry_export(db, inv, settings=_settings_from_args(args))
     out_path = getattr(args, "output", None) or DEFAULT_OUTPUT
-    with open(out_path, "w") as f:
-        json.dump(export, f, indent=2)
+    try:
+        with open(out_path, "w") as f:
+            json.dump(export, f, indent=2)
+    except OSError as exc:
+        raise SystemExit(f"error: could not write foundry export {out_path}: {exc}") from exc
 
     settings = export["settings"]
     points = foundry_mastery_points(db, export["items"]["data"], settings)

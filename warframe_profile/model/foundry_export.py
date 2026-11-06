@@ -336,7 +336,11 @@ def _merged_settings(inventory: dict, settings: dict | None) -> dict:
     merged = _derive_settings(inventory)
     for key, limit in _SETTINGS_LIMITS.items():
         if settings and settings.get(key) is not None:
-            merged[key] = max(0, min(limit, int(settings[key])))
+            try:
+                value = int(settings[key])
+            except (TypeError, ValueError):
+                continue
+            merged[key] = max(0, min(limit, value))
     return merged
 
 
@@ -360,6 +364,7 @@ def steel_settings_from_xp(steel_xp: int) -> dict:
         error = abs(points - steel_xp)
         if best is None or error < best[0]:
             best = (error, missions, junctions)
+    assert best is not None  # the loop always runs at least once
     return {
         "steelMissionCount": best[1],
         "steelJunctionCount": best[2],

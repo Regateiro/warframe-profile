@@ -183,7 +183,7 @@ def _clean_mod_name(mod: dict) -> str:
 def _is_real_augment(mod: dict) -> bool:
     """Check if a mod is a real augment (has AugmentCard/AugmentMod in path)."""
     un = mod.get("uniqueName", "")
-    return mod.get("isAugment") and ("AugmentCard" in un or "AugmentMod" in un)
+    return bool(mod.get("isAugment")) and ("AugmentCard" in un or "AugmentMod" in un)
 
 
 #: uniqueName path substring → acquisition hint (checked in order).

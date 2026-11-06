@@ -31,7 +31,7 @@ install-user: ## Install the `warframe` command for the current user via pipx (e
 uninstall-user: ## Remove the user-level `warframe` command
 	$(PIPX) uninstall warframe-profile
 
-update: ## Download and merge the latest game data into data/export_db.json
+update: ## Download and merge the latest game data into ~/.local/share/warframe-profile/export_db.json
 	$(POETRY) run warframe update
 
 run: ## Run the CLI, e.g. make run ARGS='--ducats'
@@ -54,4 +54,4 @@ clean: ## Remove Python and ruff caches
 	rm -rf .ruff_cache
 
 clean-data: ## Remove generated data files (export db + inventory cache)
-	rm -f data/*.json
+	rm -f ~/.local/share/warframe-profile/*.json

@@ -132,7 +132,9 @@ def main() -> int:
         return 1
 
     mod_name, func_name = _COMMAND_TABLE[name]
-    mod = importlib.import_module(mod_name)
+    # mod_name comes only from the _COMMAND_TABLE whitelist above (validated
+    # against args.command), so this dynamic import is safe.
+    mod = importlib.import_module(mod_name)  # nosemgrep
     func = getattr(mod, func_name)
 
     func(args)

@@ -156,7 +156,7 @@ def categorize(item: dict) -> str:
     """
     pc = item.get("productCategory")
     if pc:
-        return _CATEGORY_BY_PC.get(pc, pc)
+        return _CATEGORY_BY_PC.get(pc, str(pc))
     source = item.get("_source", "")
     return _SOURCE_CATEGORY_FALLBACK.get(source, "Misc")
 

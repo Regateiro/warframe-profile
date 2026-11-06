@@ -49,7 +49,12 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
     cache_path = os.path.abspath(_CACHE_PATH)
     cache_mtime = os.path.getmtime(cache_path) if os.path.exists(cache_path) else 0.0
 
-    if not force_refresh and _memo is not None and _memo == (cache_mtime, False):
+    if (
+        not force_refresh
+        and _memo_value is not None
+        and _memo is not None
+        and _memo == (cache_mtime, False)
+    ):
         return _memo_value
 
     # Use cache if it exists and is < 24 hours old
@@ -71,7 +76,8 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
             MOD_LOCATIONS_URL,
             headers={"User-Agent": USER_AGENT_COMMUNITY},
         )
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        # MOD_LOCATIONS_URL is a hardcoded constant, not user-controlled.
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # nosemgrep
             raw = json.loads(resp.read().decode())
 
         # Cache to disk

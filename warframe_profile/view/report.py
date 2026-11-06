@@ -19,6 +19,7 @@ lives in :mod:`warframe_profile.view.web.templates`.
 
 import math
 from collections import defaultdict
+from typing import Literal
 
 from prettytable import PrettyTable, TableStyle
 
@@ -63,7 +64,10 @@ def _build_sell_dict(
     return sell
 
 
-def _new_table(columns: list[tuple[str, str]], title: str | None = None) -> PrettyTable:
+def _new_table(
+    columns: list[tuple[str, Literal["l", "c", "r"]]],
+    title: str | None = None,
+) -> PrettyTable:
     """Create a :class:`PrettyTable` from ``(column, alignment)`` pairs.
 
     Every report table is built this way: field names, ``DEFAULT`` style and

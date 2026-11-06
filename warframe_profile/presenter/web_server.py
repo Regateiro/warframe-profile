@@ -25,6 +25,11 @@ import urllib.parse
 
 from warframe_profile import DATA_DIR
 from warframe_profile.model.analysis import (
+    AnalysisResult,
+    ExcessItem,
+    NeededPart,
+    RelicInfo,
+    SellableEquipment,
     analyze,
     build_item_index,
     build_needed_drops,
@@ -71,7 +76,16 @@ from warframe_profile.view.web.templates import (
     render_weapon_chains,
 )
 
-PORT = int(os.environ.get("WARFRAME_WEB_PORT", "8080"))
+
+def _parse_port() -> int:
+    """Parse the ``WARFRAME_WEB_PORT`` env var, falling back to 8080."""
+    try:
+        return int(os.environ.get("WARFRAME_WEB_PORT", "8080"))
+    except ValueError:
+        return 8080
+
+
+PORT = _parse_port()
 
 
 # ---------------------------------------------------------------------------
@@ -96,19 +110,19 @@ class DataCache:
     items_by_un: dict = {}
     recipes_by_result: dict = {}
     loc_dict: dict = {}
-    by_name: dict | None = None
+    by_name: dict = {}
     # Analysis caches (lazy-computed via _ensure_* methods)
-    prime_map: dict | None = None
-    owned_finished: set | None = None
-    extra_builds: dict | None = None
-    analysis_result = None
-    relic_info = None
-    needed_drops = None
-    sellable = None
-    owned_prime_pairs = None
-    excess_items = None
-    weapon_chains = None
-    foundry_export = None
+    prime_map: dict[str, dict] | None = None
+    owned_finished: set[str] | None = None
+    extra_builds: dict[str, int] | None = None
+    analysis_result: AnalysisResult | None = None
+    relic_info: list[RelicInfo] | None = None
+    needed_drops: list[NeededPart] | None = None
+    sellable: list[SellableEquipment] | None = None
+    owned_prime_pairs: list[tuple[str, str, str]] | None = None
+    excess_items: list[ExcessItem] | None = None
+    weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
+    foundry_export: dict | None = None
     foundry_settings: tuple | None = None
 
 
@@ -118,6 +132,14 @@ _cache = DataCache()
 # potentially expose torn state) on concurrent first requests.  Re-entrant
 # because the ``_ensure_*`` helpers nest (e.g. analysis → prime map).
 _cache_lock = threading.RLock()
+
+
+def _require_db() -> ExportDB:
+    """Return the loaded item database, or raise if startup loading hasn't run."""
+    db = _cache.db
+    if db is None:
+        raise RuntimeError("Item database not loaded; call load_all() at startup first")
+    return db
 
 
 def load_db(items_cache: str) -> None:
@@ -138,7 +160,7 @@ def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
     """
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
     _cache.inventory = inv
-    _cache.owned = build_owned(inv, _cache.db.raw.get("recipes", {}))
+    _cache.owned = build_owned(inv, _require_db().raw.get("recipes", {}))
 
 
 def invalidate_analysis() -> None:
@@ -166,13 +188,14 @@ def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> No
 def _ensure_prime_map():
     """Build the prime map once (shared by the ducat and relic analyses)."""
     if _cache.prime_map is None:
-        _cache.prime_map = build_prime_map(_cache.db.raw.get("items", []))
+        _cache.prime_map = build_prime_map(_require_db().raw.get("items", []))
 
 
 def _ensure_owned_state():
     """Build ``owned_finished`` / ``extra_builds`` once per inventory load."""
     if _cache.owned_finished is None or _cache.extra_builds is None:
         _ensure_prime_map()
+        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
         _cache.owned_finished = compute_owned_finished(_cache.inventory, EQUIPMENT_SECTIONS, None)
         _cache.extra_builds = compute_extra_builds(
             _cache.prime_map, _cache.owned, _cache.owned_finished
@@ -187,20 +210,21 @@ def _ensure_analysis():
     with _cache_lock:
         if _cache.analysis_result is not None:
             return
-        items = _cache.db.items
+        items = _require_db().items
         _ensure_prime_map()
         _ensure_owned_state()
+        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
         _cache.analysis_result = analyze(
             _cache.inventory,
             _cache.prime_map,
             EQUIPMENT_SECTIONS,
-            recipes=_cache.db.recipes,
+            recipes=_require_db().recipes,
             owned=_cache.owned,
             owned_finished=_cache.owned_finished,
             extra_builds=_cache.extra_builds,
         )
         _cache.sellable = compute_sellable_equipment(
-            _cache.db,
+            _require_db(),
             _cache.inventory,
             EQUIPMENT_SECTIONS,
         )
@@ -230,10 +254,11 @@ def _ensure_excess():
         if _cache.excess_items is not None:
             return
         _ensure_owned_state()
+        assert _cache.owned_finished is not None  # guaranteed by _ensure_owned_state
         _cache.excess_items = find_excess_blueprints_and_components(
             _cache.inventory,
             _cache.items_by_un,
-            _cache.db.recipes,
+            _require_db().recipes,
             _cache.owned,
             _cache.owned_finished,
             _cache.loc_dict,
@@ -247,8 +272,9 @@ def _ensure_relics():
     with _cache_lock:
         if _cache.relic_info is not None:
             return
-        items = _cache.db.items
+        items = _require_db().items
         _ensure_owned_state()
+        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
         _cache.relic_info = build_relics_map(
             items,
             _cache.inventory,
@@ -292,7 +318,9 @@ def _ensure_foundry_export(settings: dict | None):
     with _cache_lock:
         if _cache.foundry_export is not None and _cache.foundry_settings == key:
             return _cache.foundry_export
-        _cache.foundry_export = build_foundry_export(_cache.db, _cache.inventory, settings=settings)
+        _cache.foundry_export = build_foundry_export(
+            _require_db(), _cache.inventory, settings=settings
+        )
         _cache.foundry_settings = key
         return _cache.foundry_export
 
@@ -305,9 +333,9 @@ def _ensure_foundry_export(settings: dict | None):
 class WarframeHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler — routes paths to handler methods."""
 
-    def log_message(self, fmt, *args):
+    def log_message(self, format: str, *args: object) -> None:
         """Log one request line to stderr in a compact format."""
-        sys.stderr.write(f"[web] {args[0]} {args[1]} {args[2]}\n")
+        sys.stderr.write("[web] " + format % args + "\n")
 
     def _html(self, code: int, html: str):
         """Send an HTML response with *code* and *html* body."""
@@ -373,6 +401,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
     def _handle_weapon_chains(self):
         """Serve the weapon upgrade chains view."""
         _ensure_weapon_chains()
+        assert _cache.weapon_chains is not None  # guaranteed by _ensure_weapon_chains
         chains, req, craft, shown = _cache.weapon_chains
         self._html(
             200,

@@ -15,6 +15,7 @@ The main entry point is :func:`analyze`, which produces an
 
 import bisect
 from collections import defaultdict
+from collections.abc import Set
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -1065,7 +1066,7 @@ def find_sellable_equipment(
     inventory: dict,
     market_map: dict[str, dict],
     equipment_sections: list[str],
-    exclude_ingredients: set[str] = frozenset(),
+    exclude_ingredients: Set[str] = frozenset(),
 ) -> list[SellableEquipment]:
     """Find owned equipment that can be safely sold (re-buyable for credits).
 

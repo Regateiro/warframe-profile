@@ -111,8 +111,14 @@ def download_json(url: str) -> dict | list:
         url,
         headers={"User-Agent": "Mozilla/5.0"},
     )
+    # Callers only pass hardcoded DE_BASE/WFCD_BASE URLs, not user input.
+    # semgrepignore
     with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())
+        data = r.read()
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON from {url}: {exc}") from exc
 
 
 def download_wfcd_items() -> list[dict]:
@@ -163,6 +169,38 @@ def _resolve_name(name_key: str, loc: dict) -> str:
     return name_key
 
 
+def _enrich_component(comp: dict, de_by_un: dict[str, dict], loc: dict) -> None:
+    """Fill in ``name`` / ``tradable`` / ``primeSellingPrice`` for *comp*.
+
+    WFCD components carry only ``uniqueName`` + ``itemCount``.  The
+    human-readable name, tradability, and ducat sell price live on the
+    matching DE public-export item (indexed by uniqueName).
+
+    Blueprints have no ``name`` of their own, so it is derived from the
+    parent item's name (``resultType``) with a ``" Blueprint"`` suffix.
+    """
+    de = de_by_un.get(comp.get("uniqueName", ""))
+    if not de:
+        return
+    if "tradable" in de:
+        comp["tradable"] = de["tradable"]
+    if de.get("primeSellingPrice"):
+        comp["primeSellingPrice"] = de["primeSellingPrice"]
+
+    name = _resolve_name(de["name"], loc) if de.get("name") else ""
+    if not name and de.get("resultType"):
+        parent = de_by_un.get(de["resultType"], {})
+        pname = (
+            _resolve_name(parent["name"], loc)
+            if parent.get("name")
+            else de["resultType"].split("/")[-1]
+        )
+        name = pname + " Blueprint"
+    if not name:
+        name = comp.get("uniqueName", "").split("/")[-1]
+    comp["name"] = name
+
+
 def _enrich_from_wfcd(merged: dict, wfcd_item: dict | None) -> None:
     """Overlay WFCD fields and components onto *merged*."""
     if not wfcd_item:
@@ -208,6 +246,18 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
     """
     wfcd_by_un = _index_wfcd_by_un(wfcd_items)
     loc: dict = export.get("dict", {})
+
+    # Index every DE export item by uniqueName.  Used to enrich components
+    # (name / tradable / ducat price), which WFCD does not carry.
+    de_by_un: dict[str, dict] = {}
+    for label in DE_FILES.values():
+        cat_data = export.get(label)
+        if not isinstance(cat_data, dict):
+            continue
+        for un, it in cat_data.items():
+            if isinstance(it, dict) and un not in de_by_un:
+                de_by_un[un] = it
+
     items: list[dict] = []
     seen: set[str] = set()
 
@@ -259,6 +309,11 @@ def merge(export: dict, wfcd_items: list[dict]) -> dict:
         _correct_amp_masterable(merged, un)
         items.append(merged)
 
+    # WFCD components lack name/tradable/ducats; fill them from the DE export.
+    for item in items:
+        for comp in item.get("components", []):
+            _enrich_component(comp, de_by_un, loc)
+
     return {
         "items": items,
         "recipes": export.get("recipes", {}),
@@ -301,7 +356,10 @@ def main(args=None) -> None:
     if args is not None and getattr(args, "refresh_items", False):
         if os.path.exists(out_path):
             print(f"Removing {out_path} ...", file=sys.stderr)
-            os.remove(out_path)
+            try:
+                os.remove(out_path)
+            except OSError as exc:
+                print(f"warning: could not remove {out_path}: {exc}", file=sys.stderr)
 
     # Download DE export files.
     for fname, label in DE_FILES.items():
@@ -320,9 +378,16 @@ def main(args=None) -> None:
     print("Merging...", file=sys.stderr)
     merged = merge(combined, wfcd)
 
-    # Write output.
-    with open(out_path, "w") as f:
-        json.dump(merged, f, separators=(",", ":"))
+    # Write output (ensure the parent data directory exists first).
+    try:
+        out_dir = os.path.dirname(out_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(merged, f, separators=(",", ":"))
+    except OSError as e:
+        print(f"  Error: could not write {out_path}: {e}", file=sys.stderr)
+        sys.exit(1)
 
     n_items = len(merged["items"])
     n_dict = len(merged.get("dict", {}))

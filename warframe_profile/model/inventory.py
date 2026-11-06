@@ -135,6 +135,9 @@ class ExportDB:
         """Store the file path; data is loaded lazily on first call."""
         self._path = path
         self._data: dict | None = None
+        # Memoisation slots for foundry keying (populated on first use).
+        self._foundry_categories_by_key: dict[str, set[str]] | None = None
+        self._foundry_items_by_un: dict[str, dict] | None = None
 
     def load(self, refresh: bool = False) -> None:
         """Load (or reload) the database from disk.
@@ -143,13 +146,22 @@ class ExportDB:
         next ``--update`` run produces fresh data.
         """
         if refresh and self._path and os.path.exists(self._path):
-            os.remove(self._path)
+            try:
+                os.remove(self._path)
+            except OSError as exc:
+                # Best-effort cleanup of a stale cache; existence is re-checked below.
+                print(f"warning: could not remove stale cache {self._path}: {exc}", file=sys.stderr)
         if not self._path or not os.path.exists(self._path):
             raise ItemCacheNotFoundError(
                 f"Item cache not found at {self._path}. Run --update first."
             )
-        with open(self._path) as f:
-            self._data = json.load(f)
+        try:
+            with open(self._path) as f:
+                self._data = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ItemCacheNotFoundError(
+                f"Could not read item cache at {self._path}: {exc}. Run --update first."
+            ) from exc
 
     @property
     def items(self) -> list[dict]:
@@ -218,7 +230,14 @@ def find_warframe_pid() -> int:
     Raises:
         WarframeNotRunningError: if no matching process is found.
     """
-    for pid_str in os.listdir("/proc"):
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        raise WarframeNotRunningError(
+            "Warframe process not found. Live inventory needs Linux /proc; "
+            "launch the game and reach the Orbiter."
+        ) from None
+    for pid_str in entries:
         if not pid_str.isdigit():
             continue
         try:
@@ -257,8 +276,11 @@ def find_in_memory(
         ``(address, surrounding_bytes)`` or ``(None, None)``.
     """
     p = pattern.encode("ascii")
-    with open(f"/proc/{pid}/maps") as f:
-        regions: list[list[str]] = [line.split() for line in f]
+    try:
+        with open(f"/proc/{pid}/maps") as f:
+            regions: list[list[str]] = [line.split() for line in f]
+    except OSError:
+        return (None, None)  # /proc unavailable (non-Linux or no access) → no match
 
     for parts in regions:
         perms = parts[1]
@@ -311,8 +333,8 @@ def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
         InventoryFetchError: if credentials cannot be found.
     """
     for pattern in ("&nonce=", "accountId="):
-        addr, chunk = find_in_memory(pid, pattern)
-        if addr is None:
+        _, chunk = find_in_memory(pid, pattern)
+        if chunk is None:
             continue
         url_str = chunk.decode("ascii", errors="replace")
         m = _CREDENTIAL_RE.search(url_str)
@@ -342,7 +364,10 @@ def fetch_inventory() -> tuple[dict, str]:
     )
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
         data = r.read()
-    return json.loads(data), account_id
+    try:
+        return json.loads(data), account_id
+    except json.JSONDecodeError as exc:
+        raise InventoryFetchError(f"Invalid JSON from live inventory: {exc}") from exc
 
 
 def load_inventory(path: str) -> dict:
@@ -351,8 +376,11 @@ def load_inventory(path: str) -> dict:
     Used when a cached ``inventory.json`` exists and ``--refresh`` was
     not specified.
     """
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InventoryFetchError(f"Could not load inventory cache {path}: {exc}") from exc
 
 
 def fetch_de_profile(account_id: str) -> dict:
@@ -585,8 +613,11 @@ def load_inventory_with_fallback(
     """
     if refresh or not os.path.exists(inv_path):
         inv, account_id = fetch_inventory()
-        with open(inv_path, "w") as f:
-            json.dump(inv, f, indent=2)
+        try:
+            with open(inv_path, "w") as f:
+                json.dump(inv, f, indent=2)
+        except OSError as exc:
+            print(f"warning: could not save inventory cache {inv_path}: {exc}", file=sys.stderr)
         misc, rec, equip = inventory_summary(inv)
         print(
             f"  Inventory: {misc} items, {rec} recipes, {equip} equipment  (account: {account_id})",
