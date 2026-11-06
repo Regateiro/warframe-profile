@@ -276,15 +276,20 @@ def compute_extra_builds(
         # Don't count sub-craft dependencies for items the player already owns.
         if normalize_path(un) in owned_finished:
             continue
-        for part in info["parts"]:
+        # Use all components (tradable + non-tradable): weapons consumed as
+        # akimbo ingredients (e.g. Magnus Prime in Akmagnus Prime) are
+        # non-tradable, so they are absent from ``parts``.
+        for part in info.get("all_parts", info["parts"]):
             if part["uniqueName"] in buildable_keys:
                 component_need[part["uniqueName"]] += part["count"]
 
     extra_builds: dict[str, int] = {}
     for dep_un, total_needed in component_need.items():
         dep_norm = normalize_path(dep_un)
-        owned_copies = owned.get(dep_norm, 0)
-        available = owned_copies - (1 if dep_norm in owned_finished else 0)
+        # Owned copies count toward the sub-craft need: a Magnus Prime you own
+        # can be consumed to build Akmagnus Prime, so only the shortfall is
+        # built. (e.g. need 2, own 1 -> build 1 more.)
+        available = owned.get(dep_norm, 0)
         extra = max(0, total_needed - available)
         if extra > 0:
             extra_builds[dep_un] = extra
@@ -1238,6 +1243,7 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
                 "category": ...,
                 "masteryReq": ...,
                 "parts": [{"uniqueName", "name", "count", "ducats"}, ...],
+                "all_parts": [{"uniqueName", "name", "count"}, ...],
                 "is_cosmetic": bool,
                 "masterable": bool,
             },
@@ -1263,29 +1269,47 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
         if not any(t in tags or t in cat for t in _PRIME_TAGS) and "prime" not in name_lower:
             continue
 
-        # Collect tradable components, deduplicating by uniqueName.
+        # Collect components, deduplicating by uniqueName.  ``parts`` holds
+        # only tradable parts (for ducat / surplus analysis); ``all_parts``
+        # holds every component so sub-craft dependencies on buildable
+        # weapons (e.g. Magnus Prime inside Akmagnus Prime) are visible to
+        # compute_extra_builds — those weapons are non-tradable.
         comps = item.get("components", [])
         parts_by_un: dict[str, dict] = {}
+        all_by_un: dict[str, dict] = {}
         for c in comps:
             cu = c.get("uniqueName", "")
+            if not cu:
+                continue
+            cnt = c.get("itemCount", 1)
+            if cu in all_by_un:
+                all_by_un[cu]["count"] += cnt
+            else:
+                all_by_un[cu] = {
+                    "uniqueName": cu,
+                    "name": c.get("name", ""),
+                    "count": cnt,
+                }
             if c.get("tradable") is False:
                 continue
             if cu in parts_by_un:
-                parts_by_un[cu]["count"] += c.get("itemCount", 1)
+                parts_by_un[cu]["count"] += cnt
             else:
                 parts_by_un[cu] = {
                     "uniqueName": cu,
                     "name": c.get("name", ""),
-                    "count": c.get("itemCount", 1),
+                    "count": cnt,
                     "ducats": c.get("primeSellingPrice") or c.get("ducats", 0),
                 }
 
         parts_needed = list(parts_by_un.values())
+        all_parts = list(all_by_un.values())
         primes[un] = {
             "name": item.get("name", un),
             "category": cat,
             "masteryReq": item.get("masteryReq", 0),
             "parts": parts_needed,
+            "all_parts": all_parts,
             "is_cosmetic": cat in _COSMETIC_CATEGORIES,
             "masterable": item.get("masterable", False),
         }
