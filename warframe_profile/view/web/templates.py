@@ -28,6 +28,7 @@ from warframe_profile.model.craft_model import (
     un_to_name,
 )
 from warframe_profile.model.utils import normalize_path
+from warframe_profile.view.report import part_label
 
 GREEN = "#27ae60"
 RED = "#e74c3c"
@@ -471,7 +472,7 @@ def render_ducats_sell(data) -> str:
                 sell[key]["ducats"] = p.ducats
     if sell:
         srows = "".join(
-            f"<tr><td>{item} &mdash; {part}</td>"
+            f"<tr><td>{part_label(item, part)}</td>"
             f'<td class="num">x{info["count"]}</td>'
             f'<td class="num">{info["ducats"]}</td>'
             f'<td class="num">{info["count"] * info["ducats"]}</td></tr>'

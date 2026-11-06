@@ -170,6 +170,18 @@ def _print_excess_parts_section(relevant, n_silent) -> None:
         print(f"  \u2026 {n_silent} more owned \u2014 fully built, no spare parts")
 
 
+def part_label(item_name: str, part_name: str) -> str:
+    """Show a part without duplicating the parent item name.
+
+    Part names already include the parent (e.g. ``'Acceltra Prime
+    Receiver'``), so prepend the item name only for a bare part type
+    (e.g. ``'Receiver'``).
+    """
+    if part_name == item_name or part_name.startswith(item_name + " "):
+        return part_name
+    return f"{item_name} {part_name}"
+
+
 def _print_sell_ducats_section(items, total_safe) -> None:
     """Print the 'Sell for Ducats' table."""
     sell = _build_sell_dict(items)
@@ -185,11 +197,11 @@ def _print_sell_ducats_section(items, total_safe) -> None:
     for idx, ((_item_name, _part_name), info) in enumerate(sorted_items):
         t.add_row(
             [
-                f"{_item_name} {_part_name}",
+                part_label(_item_name, _part_name),
                 f"x{info['count']}",
                 info["ducats"],
                 info["count"] * info["ducats"],
-            ],  # noqa: E501
+            ],
             divider=idx == len(sorted_items) - 1,
         )
     t.add_row(["TOTAL", "", "", total_safe])
