@@ -32,11 +32,11 @@ jobs:
         run: python -m PyInstaller --clean --noconfirm warframe.spec
 
       - name: Smoke test
-        run: dist\warframe.exe --help
+        run: dist\warframe-profile.exe --help
 
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
-          name: warframe-windows-x64
-          path: dist/warframe.exe
+          name: warframe-profile-windows-x64
+          path: dist/warframe-profile.exe
           if-no-files-found: error

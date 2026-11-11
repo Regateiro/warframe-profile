@@ -29,7 +29,9 @@ _COMMAND_TABLE = {
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the single, unified argument parser for all sub-commands."""
-    parser = argparse.ArgumentParser(description="Warframe Profile Tool")
+    parser = argparse.ArgumentParser(
+        description="Warframe Profile Tool (runs the web UI when no sub-command is given)"
+    )
 
     # -- Shared options (used by multiple sub-commands).
     # These are on the main parser so shared flags like --refresh must be
@@ -56,7 +58,12 @@ def _build_parser() -> argparse.ArgumentParser:
     shared.add_argument(
         "--refresh-items", action="store_true", help="Delete and re-load the items cache"
     )
-    shared.add_argument("--port", type=int, default=8080, help="Web server port (default: 8080)")
+    shared.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Web server port (default: 8090, or $WARFRAME_WEB_PORT)",
+    )
 
     # -- Sub-commands (optional so bare --refresh works).
     sub = parser.add_subparsers(dest="command", help="Available commands")
@@ -78,7 +85,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("cleanup", help="Inventory cleanup suggestions")
     sub.add_parser("update", help="Update export database")
     sub.add_parser("relics", help="Relic drop analysis")
-    sub.add_parser("serve", help="Start web UI server")
+    sub.add_parser("serve", help="Start web UI server (default when no command is given)")
     sub.add_parser("mastery", help="Mastery rank progression & farming guide")
     sub.add_parser("mods", help="List mods you don't own yet")
 
@@ -131,6 +138,10 @@ def main() -> int:
             print(f"  Error: {exc}", file=sys.stderr)
             return 1
         return 0
+
+    # No sub-command: open the web UI, which mirrors the CLI analyses.
+    if not args.command:
+        args.command = "serve"
 
     # Dynamic import and dispatch to the target module.
     name = args.command

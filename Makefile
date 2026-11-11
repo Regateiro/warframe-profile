@@ -1,9 +1,9 @@
 # Warframe Profile — development, packaging, and installation tasks.
 #
 #   make install        # set up the Poetry virtualenv (dev tools included)
-#   make build-linux    # build dist/linux/warframe (one-file executable)
+#   make build-linux    # build dist/linux/warframe-profile (one-file executable)
 #   make install-linux  # build and install it to $(BINDIR) (default ~/.local/bin)
-#   make build-windows  # cross-build dist/windows/warframe.exe via Wine
+#   make build-windows  # cross-build dist/windows/warframe-profile.exe via Wine
 #   make run ARGS=ducats
 #   make check
 #   make clean
@@ -17,6 +17,9 @@ WINE   ?= wine
 
 DIST  ?= dist
 BUILD ?= build
+
+#: Name of the built executable (without the platform extension).
+BIN_NAME ?= warframe-profile
 
 #: Where `make install-linux` puts the binary. Override with BINDIR=... or
 #: use DESTDIR for staged installs (e.g. packaging).
@@ -73,18 +76,18 @@ build-deps: ## Install PyInstaller into the Poetry environment (used by `make bu
 	@$(POETRY) run python -c 'import PyInstaller' 2>/dev/null || \
 		$(POETRY) run python -m pip install --disable-pip-version-check -q pyinstaller
 
-build-linux: build-deps ## Build a one-file Linux executable at dist/linux/warframe
+build-linux: build-deps ## Build a one-file Linux executable at dist/linux/warframe-profile
 	$(POETRY) run python -m PyInstaller --clean --noconfirm \
 		--distpath "$(DIST)/linux" --workpath "$(BUILD)/linux" warframe.spec
-	@printf '\nBuilt %s\n' "$(DIST)/linux/warframe"
+	@printf '\nBuilt %s\n' "$(DIST)/linux/$(BIN_NAME)"
 
 install-linux: build-linux ## Build and install the Linux executable to $(BINDIR)
 	install -d "$(DESTDIR)$(BINDIR)"
-	install -m 755 "$(DIST)/linux/warframe" "$(DESTDIR)$(BINDIR)/warframe"
-	@printf '\nInstalled %s\n' "$(DESTDIR)$(BINDIR)/warframe"
+	install -m 755 "$(DIST)/linux/$(BIN_NAME)" "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
+	@printf '\nInstalled %s\n' "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
 
 uninstall-linux: ## Remove the installed Linux executable
-	rm -f "$(DESTDIR)$(BINDIR)/warframe"
+	rm -f "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
 
 # ---------------------------------------------------------------------------
 # Windows executable (cross-build via Wine)
@@ -116,11 +119,11 @@ wine-setup: ## Install Windows Python + PyInstaller in the Wine prefix (used by 
 			-m pip install --disable-pip-version-check -q .; \
 	fi
 
-build-windows: wine-setup ## Cross-build dist/windows/warframe.exe (requires Wine)
+build-windows: wine-setup ## Cross-build dist/windows/warframe-profile.exe (requires Wine)
 	WINEPREFIX="$(WINEPREFIX)" WINEDEBUG=-all $(WINE) '$(WIN_PYTHON)' \
 		-m PyInstaller --clean --noconfirm \
 		--distpath "$(DIST)/windows" --workpath "$(BUILD)/windows" warframe.spec
-	@printf '\nBuilt %s\n' "$(DIST)/windows/warframe.exe"
+	@printf '\nBuilt %s\n' "$(DIST)/windows/$(BIN_NAME).exe"
 
 # ---------------------------------------------------------------------------
 # Cleanup

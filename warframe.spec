@@ -1,13 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for a single-file ``warframe`` executable.
+"""PyInstaller spec for a single-file ``warframe-profile`` executable.
 
 Build (on Windows, for a Windows .exe):
 
     py -3 -m pip install pyinstaller
     py -3 -m PyInstaller --clean --noconfirm warframe.spec
 
-The resulting executable is ``dist/warframe.exe`` (``dist/warframe`` on
-Linux/macOS).  PyInstaller cannot cross-compile: build on the target OS.
+The resulting executable is ``dist/warframe-profile.exe``
+(``dist/warframe-profile`` on Linux/macOS).  PyInstaller cannot
+cross-compile: build on the target OS.
 
 The application dispatches sub-commands through ``importlib``, so the
 hidden-import list is generated from the whole ``warframe_profile``
@@ -45,7 +46,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="warframe",
+    name="warframe-profile",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

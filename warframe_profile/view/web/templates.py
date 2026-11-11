@@ -6,7 +6,8 @@ wrapped in the shared dark-theme page layout (:func:`_page`).
 
 The page layout includes:
     - GitHub-dark inspired CSS theme.
-    - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Cleanup).
+    - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Mastery,
+      Mods, Cleanup).
     - Refresh Inventory button (POSTs to /refresh).
     - Subtab bars for views with multiple sub-sections (ducats, relics, cleanup).
 
@@ -18,10 +19,12 @@ import math
 from collections import defaultdict
 
 from warframe_profile.model.craft_model import (
+    add_missing_blueprint_requirement,
     display_name,
     get_recipe_components,
     has_recipe,
     is_blueprint_un,
+    postprocess_craft_plan,
     resolve_name,
     resolve_tree,
     should_expand,
@@ -43,6 +46,7 @@ _PAGE_STYLES = f"""<style>
           background: #0d1117; color: #c9d1d9; padding: 20px; }}
   h1 {{ font-size: 1.6rem; margin-bottom: 16px; color: #58a6ff; }}
   h2 {{ font-size: 1.2rem; margin: 20px 0 10px; color: #8b949e; }}
+  h3 {{ font-size: 1rem; margin: 14px 0 6px; color: #c9d1d9; }}
   nav {{ display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 24px;
          border-bottom: 1px solid #30363d; padding-bottom: 8px; align-items: center; }}
   nav a {{ padding: 6px 14px; border-radius: 6px; text-decoration: none;
@@ -109,6 +113,8 @@ def _page(title: str, content: str, active: str) -> str:
         ("relics", "Relics", "/relics"),
         ("craft", "Craft", "/craft"),
         ("weapon-chains", "Weapon Chains", "/weapon-chains"),
+        ("mastery", "Mastery", "/mastery"),
+        ("mods", "Mods", "/mods"),
         ("cleanup", "Cleanup", "/cleanup"),
     ]
     tab_links = "".join(_nav_link(key, label, url, active) for key, label, url in tabs)
@@ -182,6 +188,8 @@ def render_home() -> str:
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
+  <li><strong>Mastery</strong> — Masterable items ranked, in progress, and blueprint-ready</li>
+  <li><strong>Mods</strong> — Missing mods grouped by in-game category</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
 </ul>
 <p class="dim" style="font-size:0.8rem">The <strong>Export for Warframe Foundry</strong> button
@@ -612,9 +620,13 @@ def render_craft_result(
             loc_dict,
             max_depth=depth,
         )
+        add_missing_blueprint_requirement(un, name, req, owned, recipes_by_result)
+        requirements = postprocess_craft_plan(
+            req, craft, owned, items_by_un, recipes_by_result, loc_dict
+        )
         lines.append(f"""<details>
 <summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
-<div class="tree">{tree}</div>{_craft_summary_html(req, craft)}</details>""")
+<div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
     content = (
         _CRAFT_TAB_BAR
@@ -682,9 +694,13 @@ def render_weapon_chains(
             loc_dict,
             max_depth=5,
         )
+        add_missing_blueprint_requirement(final_un, names[-1], req, owned, recipes_by_result)
+        requirements = postprocess_craft_plan(
+            req, craft, owned, items_by_un, recipes_by_result, loc_dict
+        )
         parts.append(f"""<details>
 <summary>{" → ".join(names)}</summary>
-<div class="tree">{tree}</div>{_craft_summary_html(req, craft)}</details>""")
+<div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
     parts.append(_craft_summary_html(all_requirements, all_craftables))
 
@@ -694,6 +710,120 @@ def render_weapon_chains(
   <a href="/weapon-chains" class="active">Weapon Chains</a>
 </div>"""
     return _page("Weapon Chains", tab_bar + "".join(parts), "weapon-chains")
+
+
+# ---------------------------------------------------------------------------
+# Mastery
+# ---------------------------------------------------------------------------
+# Mirrors the CLI mastery report: summary plus blueprint-ready, never-touched
+# (tiered), and in-progress (tiered) sections.
+#
+
+
+def _mastery_table(rows) -> str:
+    """Render one Item / Category / MR / Source table."""
+    body = "".join(
+        f"<tr><td>{html.escape(row.name)}</td>"
+        f"<td>{html.escape(row.category)}</td>"
+        f'<td class="num">{row.mr:,}</td>'
+        f"<td>{html.escape(row.source)}</td></tr>"
+        for row in rows
+    )
+    return f"""<table><thead><tr><th>Item</th><th>Category</th>
+<th class='num'>MR</th><th>Source</th></tr></thead><tbody>{body}</tbody></table>"""
+
+
+def render_mastery(report) -> str:
+    """Render the Mastery tab (summary + item sections grouped by tier)."""
+    blueprint_ready, never_touched, in_progress = report.sections
+    parts = [
+        f"""<h2>Summary</h2>
+<p>{report.mastered:,} / {report.total:,} masterable items mastered
+   ({report.percent}%)</p>
+<p>{blueprint_ready.count} blueprints ready
+   &middot; {never_touched.count} items never touched
+   &middot; {in_progress.count} in progress
+   &middot; {report.remaining} remaining</p>
+<p>~{report.total_mr:,} MR available from unmastered items</p>"""
+    ]
+
+    for section in report.sections:
+        if not section.rows:
+            continue
+        parts.append(f"<h2>{section.header.title()}</h2>")
+        if section.desc:
+            parts.append(f'<p class="dim">{html.escape(section.desc)}</p>')
+        parts.append(
+            f"<p>{section.count} item{'s' if section.count != 1 else ''}"
+            f" &mdash; ~{section.mr:,} MR</p>"
+        )
+
+        if not section.group_by_tier:
+            parts.append(_mastery_table(section.rows))
+            continue
+
+        for group in section.tier_groups:
+            parts.append(f"<h3>{html.escape(group.label)}</h3>")
+            parts.append(f'<p class="dim">{html.escape(group.desc)}</p>')
+            parts.append(
+                f"<p>{group.count} item{'s' if group.count != 1 else ''}"
+                f" &mdash; ~{group.mr:,} MR</p>"
+            )
+            parts.append(_mastery_table(group.rows))
+
+    parts.append(
+        f"<p><strong>{report.remaining} items remaining"
+        f" &mdash; ~{report.total_mr:,} MR to earn</strong></p>"
+    )
+    return _page("Mastery", "".join(parts), "mastery")
+
+
+# ---------------------------------------------------------------------------
+# Mods
+# ---------------------------------------------------------------------------
+# Mirrors the CLI missing-mods report: category summary plus per-category
+# tables with rarity and acquisition hints.
+#
+
+
+def render_mods(report) -> str:
+    """Render the Mods tab (category summary + missing mods per category)."""
+    parts = [
+        f"""<h2>Summary</h2>
+<p>Owned: {report.owned_unique:,} unique mods
+   ({report.total_copies:,} total copies)</p>
+<p>Missing: {report.total_missing:,} mods
+   <span class="dim">(excluding rivens, focus, transmutation)</span></p>"""
+    ]
+
+    if not report.categories:
+        parts.append('<p class="green">You have all mods!</p>')
+        return _page("Mods", "".join(parts), "mods")
+
+    summary_rows = "".join(
+        f"<tr><td>{html.escape(cat.name)}</td>"
+        f'<td class="num">{cat.owned}</td>'
+        f'<td class="num">{cat.missing}</td></tr>'
+        for cat in sorted(report.categories, key=lambda c: c.missing, reverse=True)
+    )
+    parts.append(f"""<h2>Missing Mods by Category</h2>
+<table><thead><tr><th>Category</th><th class='num'>Owned</th>
+<th class='num'>Missing</th></tr></thead><tbody>{summary_rows}</tbody></table>""")
+
+    for cat in report.categories:
+        rows = "".join(
+            f"<tr><td>{html.escape(row.name)}</td>"
+            f"<td>{html.escape(row.rarity)}</td>"
+            f"<td>{html.escape(row.source)}</td></tr>"
+            for row in cat.rows
+        )
+        parts.append(f"""<details>
+<summary>{html.escape(cat.name)}
+  <span class="dim">({cat.missing} missing)</span></summary>
+<table><thead><tr><th>Mod</th><th>Rarity</th><th>Source</th></tr></thead>
+<tbody>{rows}</tbody></table></details>""")
+
+    return _page("Mods", "".join(parts), "mods")
 
 
 # ---------------------------------------------------------------------------

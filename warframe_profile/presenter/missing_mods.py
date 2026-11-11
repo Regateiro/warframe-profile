@@ -11,6 +11,7 @@ Flow:
 """
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 from prettytable import PrettyTable, TableStyle
 
@@ -367,26 +368,90 @@ def analyze_missing_mods(
     return owned_mods, dict(missing_by_cat), dict(owned_by_cat), len(unique_game_mods), drop_data
 
 
-def print_missing_mods_report(
-    owned_mods: dict[str, int],
-    missing_by_cat: dict[str, list[dict]],
-    owned_by_cat: dict[str, int],
-    total_game_mods: int,
-    drop_data: dict[str, list[dict]],
-) -> None:
-    """Print the missing mods report."""
-    total_missing = sum(len(mods) for mods in missing_by_cat.values())
-    owned_count = len(owned_mods)
-    total_copies = sum(owned_mods.values())
+# ---------------------------------------------------------------------------
+# Report model (shared by the CLI and web views)
+# ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class ModRow:
+    """One missing mod, ready for display."""
+
+    name: str
+    rarity: str
+    source: str
+
+
+@dataclass
+class ModCategory:
+    """Missing mods in one in-game category."""
+
+    name: str
+    owned: int
+    missing: int
+    rows: list[ModRow] = field(default_factory=list)
+
+
+@dataclass
+class ModsReport:
+    """Complete missing-mods report shared by the CLI and web views."""
+
+    owned_unique: int
+    total_copies: int
+    total_missing: int
+    total_game_mods: int
+    categories: list[ModCategory] = field(default_factory=list)
+
+
+def build_mods_report(db: ExportDB, inv: dict) -> ModsReport:
+    """Build the full missing-mods report shared by ``mods`` and the web UI."""
+    owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data = analyze_missing_mods(
+        db, inv
+    )
+
+    categories: list[ModCategory] = []
+    for cat in sorted(missing_by_cat.keys(), key=_category_sort_key):
+        mods = missing_by_cat[cat]
+        categories.append(
+            ModCategory(
+                name=cat,
+                owned=owned_by_cat.get(cat, 0),
+                missing=len(mods),
+                rows=[
+                    ModRow(
+                        name=_clean_mod_name(mod),
+                        rarity=mod.get("rarity", "?"),
+                        source=_acquisition_hint(mod, drop_data),
+                    )
+                    for mod in mods
+                ],
+            )
+        )
+
+    return ModsReport(
+        owned_unique=len(owned_mods),
+        total_copies=sum(owned_mods.values()),
+        total_missing=sum(len(mods) for mods in missing_by_cat.values()),
+        total_game_mods=total_game_mods,
+        categories=categories,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Report printing
+# ---------------------------------------------------------------------------
+
+
+def print_missing_mods_report(report: ModsReport) -> None:
+    """Print the missing mods report."""
     print("=" * 72)
     print("  MISSING MODS REPORT")
     print("=" * 72)
-    print(f"  Owned: {owned_count} unique mods ({total_copies} total copies)")
-    print(f"  Missing: {total_missing} mods (excluding rivens, focus, transmutation)")
+    print(f"  Owned: {report.owned_unique} unique mods ({report.total_copies} total copies)")
+    print(f"  Missing: {report.total_missing} mods (excluding rivens, focus, transmutation)")
     print()
 
-    if not missing_by_cat:
+    if not report.categories:
         print("  You have all mods!")
         print("=" * 72)
         return
@@ -400,33 +465,23 @@ def print_missing_mods_report(
     summary.sortby = "Missing"
     summary.reversesort = True
 
-    for cat in sorted(missing_by_cat.keys(), key=_category_sort_key):
-        o = owned_by_cat.get(cat, 0)
-        m = len(missing_by_cat[cat])
-        summary.add_row([cat, o, m])
+    for cat in sorted(report.categories, key=lambda c: c.missing, reverse=True):
+        summary.add_row([cat.name, cat.owned, cat.missing])
 
     print(summary)
     print()
 
     # Detailed tables per category
-    sorted_cats = sorted(missing_by_cat.keys(), key=_category_sort_key)
-    for cat in sorted_cats:
-        mods = missing_by_cat[cat]
-        t = PrettyTable(title=f"{cat} ({len(mods)} missing)")
+    for cat in report.categories:
+        t = PrettyTable(title=f"{cat.name} ({cat.missing} missing)")
         t.field_names = ["Mod", "Rarity", "Source"]
         t.align["Mod"] = "l"
         t.align["Rarity"] = "l"
         t.align["Source"] = "l"
         t.set_style(TableStyle.DEFAULT)
 
-        for mod in mods:
-            t.add_row(
-                [
-                    _clean_mod_name(mod),
-                    mod.get("rarity", "?"),
-                    _acquisition_hint(mod, drop_data),
-                ]
-            )
+        for row in cat.rows:
+            t.add_row([row.name, row.rarity, row.source])
 
         print(t)
         print()
@@ -443,6 +498,4 @@ def main(args) -> None:
         args.refresh,
     )
 
-    result = analyze_missing_mods(db, inv)
-    owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data = result
-    print_missing_mods_report(owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data)
+    print_missing_mods_report(build_mods_report(db, inv))

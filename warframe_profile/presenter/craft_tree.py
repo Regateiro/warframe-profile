@@ -11,17 +11,15 @@ import sys
 
 from warframe_profile import DATA_DIR
 from warframe_profile.model.craft_model import (
+    add_missing_blueprint_requirement,
     build_items_by_un,
     build_lookup,
     build_recipes_by_result,
     build_weapon_chains,
     categorize,
-    compute_crafting_plan,
-    decompose_raw_materials,
     find_items,
-    is_blueprint_un,
     merge_dicts,
-    preserve_blueprints,
+    postprocess_craft_plan,
     resolve_tree,
     weapon_name,
 )
@@ -180,19 +178,7 @@ def _process_item(
         item_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
     )  # noqa: E501
 
-    item_un_lower = item_un.lower()
-    owned_qty = owned.get(normalize_path(item_un), 0)
-    if owned_qty < 1 and item_un_lower in recipes_by_result:
-        recipe = recipes_by_result[item_un_lower]
-        bp_key = recipe.get("_recipeKey", "")
-        if bp_key:
-            bp_owned = owned.get(normalize_path(bp_key), 0)
-            if bp_owned < 1:
-                req[bp_key.lower()] = {
-                    "name": f"{item_name} Blueprint",
-                    "quantity": 1,
-                    "owned": bp_owned,
-                }  # noqa: E501
+    add_missing_blueprint_requirement(item_un, item_name, req, owned, recipes_by_result)
 
     return req, craft
 
@@ -206,16 +192,14 @@ def _aggregate_and_print(
     loc_dict: dict,
 ) -> None:
     """Decompose raw materials, preserve blueprints, and print the summary."""
-    compute_crafting_plan(all_craftables, owned)
-    old_requirements = dict(all_requirements)
-    all_requirements = decompose_raw_materials(
-        all_craftables, recipes_by_result, items_by_un, owned, loc_dict
-    )  # noqa: E501
-    all_requirements = preserve_blueprints(old_requirements, all_requirements)
-
-    for k, v in old_requirements.items():
-        if k not in all_requirements and not is_blueprint_un(k):
-            all_requirements[k] = v
+    all_requirements = postprocess_craft_plan(
+        all_requirements,
+        all_craftables,
+        owned,
+        items_by_un,
+        recipes_by_result,
+        loc_dict,
+    )
 
     if not all_requirements:
         return

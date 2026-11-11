@@ -68,10 +68,10 @@ The `Makefile` wraps the common workflows:
 | `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
 | `make check` | Lint + format check (CI-friendly) |
 | `make update` | Refresh the merged game database |
-| `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe` |
+| `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe-profile` |
 | `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
 | `make uninstall-linux` | Remove the installed Linux executable |
-| `make build-windows` | Cross-build `dist/windows/warframe.exe` through Wine |
+| `make build-windows` | Cross-build `dist/windows/warframe-profile.exe` through Wine |
 | `make wine-setup` | Install Windows Python + PyInstaller in the Wine prefix |
 | `make clean-build` | Remove `dist/` and `build/` |
 | `make clean-wine` | Remove the Wine build prefix |
@@ -112,8 +112,8 @@ would miss.
 **Linux**
 
 ```bash
-make build-linux    # -> dist/linux/warframe
-make install-linux  # -> ~/.local/bin/warframe
+make build-linux    # -> dist/linux/warframe-profile
+make install-linux  # -> ~/.local/bin/warframe-profile
 ```
 
 **Windows (native)**
@@ -123,7 +123,7 @@ py -3 -m pip install pyinstaller
 py -3 -m PyInstaller --clean --noconfirm warframe.spec
 ```
 
-The executable is written to `dist\warframe.exe`. PyInstaller does not
+The executable is written to `dist\warframe-profile.exe`. PyInstaller does not
 cross-compile, so build it on Windows (or run the **Build Windows
 executable** GitHub Actions workflow manually from the Actions tab, or
 push a `v*` tag; it uploads the artifact). Use a 64-bit Python: the
@@ -132,7 +132,7 @@ bundled interpreter must be 64-bit for live scanning.
 **Windows (cross-build from Linux)**
 
 ```bash
-make build-windows  # -> dist/windows/warframe.exe
+make build-windows  # -> dist/windows/warframe-profile.exe
 ```
 
 This requires Wine and downloads a 64-bit Windows Python on first use.
@@ -145,6 +145,24 @@ is unsigned, so Windows SmartScreen may show a warning on first launch.
 
 All sub-commands are accessed through the unified `warframe.py` entrypoint
 (or via `python -m warframe_profile`).
+
+### Web UI (default)
+
+Running with no sub-command starts the web UI:
+
+```bash
+python warframe.py            # starts the web UI
+python warframe.py serve      # explicit form
+python warframe.py --port 8091
+WARFRAME_WEB_PORT=8091 python warframe.py
+```
+
+The default port is **8090** (Steam's `steamwebhelper` commonly occupies
+8080). Every CLI analysis has a matching web tab: ducats, relics, crafting,
+weapon chains, mastery progression, missing mods, cleanup, and the Foundry
+export. They use the same model functions and derived state as the CLI —
+including mastered-but-sold items — so both show the same recommendations.
+The **Refresh Inventory** button re-scans the game.
 
 ### Update the item database
 
@@ -262,7 +280,8 @@ by [Warframe Foundry](https://warframe-foundry.app/).  It encodes:
 
 After exporting, the command prints an estimate of the Mastery Rank the
 Foundry will display.  Open warframe-foundry.app, press **Import Data**, and
-select the file.  The web UI (`python warframe.py serve`) also offers a
+select the file.  The web UI (run `python warframe.py` with no arguments,
+or `python warframe.py serve`) also offers a
 **Export for Warframe Foundry** button on the home page that downloads the
 same file.
 

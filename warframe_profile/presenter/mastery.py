@@ -16,6 +16,8 @@ Flow:
     5. Print the report with MR estimates and acquisition sources.
 """
 
+from dataclasses import dataclass, field
+
 from prettytable import PrettyTable, TableStyle
 
 from warframe_profile.model.craft_model import build_recipes_by_result
@@ -608,6 +610,139 @@ def analyze_mastery(
 
 
 # ---------------------------------------------------------------------------
+# Report model (shared by the CLI and web views)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MasteryRow:
+    """One masterable item, ready for display."""
+
+    name: str
+    category: str
+    mr: int
+    source: str
+
+
+@dataclass
+class MasteryTierGroup:
+    """A group of items sharing a farming-difficulty tier."""
+
+    label: str
+    desc: str
+    rows: list[MasteryRow] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def mr(self) -> int:
+        return sum(row.mr for row in self.rows)
+
+
+@dataclass
+class MasterySection:
+    """One report section (blueprint ready, never touched, in progress)."""
+
+    header: str
+    desc: str
+    rows: list[MasteryRow] = field(default_factory=list)
+    group_by_tier: bool = True
+    tier_groups: list[MasteryTierGroup] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        return len(self.rows)
+
+    @property
+    def mr(self) -> int:
+        return sum(row.mr for row in self.rows)
+
+
+@dataclass
+class MasteryReport:
+    """Complete mastery progression report shared by the CLI and web views."""
+
+    total: int
+    mastered: int
+    sections: list[MasterySection] = field(default_factory=list)
+    remaining: int = 0
+    total_mr: int = 0
+
+    @property
+    def percent(self) -> int:
+        return self.mastered * 100 // self.total if self.total else 0
+
+
+def _mastery_row(item: dict) -> MasteryRow:
+    """Convert one export item into a display row."""
+    return MasteryRow(
+        name=_item_name(item),
+        category=item.get("category", ""),
+        mr=_item_mr(item),
+        source=_item_source(item),
+    )
+
+
+def _mastery_rows(items: list[tuple[dict, int]]) -> list[MasteryRow]:
+    """Convert ``(item, tier)`` pairs into display rows."""
+    return [_mastery_row(item) for item, _ in items]
+
+
+def _mastery_tier_groups(items: list[tuple[dict, int]]) -> list[MasteryTierGroup]:
+    """Group ``(item, tier)`` pairs by their difficulty tier."""
+    buckets: list[list[dict]] = [[] for _ in TIERS]
+    for item, tier_idx in items:
+        buckets[tier_idx].append(item)
+
+    groups: list[MasteryTierGroup] = []
+    for tier, bucket in zip(TIERS, buckets):
+        if bucket:
+            groups.append(
+                MasteryTierGroup(
+                    label=tier["label"],
+                    desc=tier["desc"],
+                    rows=[_mastery_row(item) for item in bucket],
+                )
+            )
+    return groups
+
+
+def build_mastery_report(db: ExportDB, inv: dict) -> MasteryReport:
+    """Build the full mastery report shared by ``mastery`` and the web UI."""
+    total, mastered, unmastered, in_progress, blueprints_ready = analyze_mastery(db, inv)
+    remaining = len(unmastered) + len(in_progress) + len(blueprints_ready)
+    sections = [
+        MasterySection(
+            header="BLUEPRINT READY",
+            desc="Blueprint owned — farm materials to build",
+            rows=_mastery_rows(blueprints_ready),
+            group_by_tier=False,
+        ),
+        MasterySection(
+            header="NEVER TOUCHED",
+            desc="No XP recorded",
+            rows=_mastery_rows(unmastered),
+            tier_groups=_mastery_tier_groups(unmastered),
+        ),
+        MasterySection(
+            header="IN PROGRESS",
+            desc="Partial XP, not yet max rank",
+            rows=_mastery_rows(in_progress),
+            tier_groups=_mastery_tier_groups(in_progress),
+        ),
+    ]
+    return MasteryReport(
+        total=total,
+        mastered=mastered,
+        sections=sections,
+        remaining=remaining,
+        total_mr=sum(section.mr for section in sections),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Report printing
 # ---------------------------------------------------------------------------
 
@@ -623,8 +758,8 @@ def _item_name(item: dict) -> str:
     return "?"
 
 
-def _print_section_table(items: list[dict]) -> None:
-    """Print a flat table for the given list of items."""
+def _print_section_table(rows: list[MasteryRow]) -> None:
+    """Print a flat table for the given rows."""
     t = PrettyTable()
     t.set_style(TableStyle.DEFAULT)
     t.field_names = ["Item", "Category", "MR", "Source"]
@@ -633,108 +768,68 @@ def _print_section_table(items: list[dict]) -> None:
     t.align["MR"] = "r"
     t.align["Source"] = "l"
 
-    for item in items:
-        t.add_row(
-            [
-                _item_name(item),
-                item.get("category", ""),
-                _item_mr(item),
-                _item_source(item),
-            ]
-        )
+    for row in rows:
+        t.add_row([row.name, row.category, row.mr, row.source])
 
     print(t)
     print()
 
 
-def _print_mastery_section(
-    header: str,
-    desc: str,
-    items: list[tuple[dict, int]],
-    show_detail: bool = True,
-    group_by_tier: bool = True,
-) -> None:
+def _print_mastery_section(section: MasterySection) -> None:
     """Print one mastery section.
 
-    When *group_by_tier* is True (default) items are grouped by difficulty
-    tier with separate tables.  When False, all items are printed in one
-    flat table.
+    When ``section.group_by_tier`` is True (default) items are grouped by
+    difficulty tier with separate tables.  Otherwise all items are printed
+    in one flat table.
     """
-    if not items:
+    if not section.rows:
         return
-    size = len(items)
-    mr = sum(_item_mr(i) for i, _ in items)
 
     print(f"{'─' * 68}")
-    print(f"  {header}")
-    if show_detail:
-        print(f"  {desc}")
-    print(f"  {size} item{'s' if size != 1 else ''}  ~{mr:,} MR")
+    print(f"  {section.header}")
+    if section.desc:
+        print(f"  {section.desc}")
+    print(f"  {section.count} item{'s' if section.count != 1 else ''}  ~{section.mr:,} MR")
     print()
 
-    if not group_by_tier:
-        _print_section_table([it for it, _ in items])
+    if not section.group_by_tier:
+        _print_section_table(section.rows)
         return
 
-    tier_groups: list[list[dict]] = [[] for _ in TIERS]
-    for item, t_idx in items:
-        tier_groups[t_idx].append(item)
-
-    for t_idx, (tier, group) in enumerate(zip(TIERS, tier_groups)):
-        if not group:
-            continue
-        count = len(group)
-        mr = sum(_item_mr(i) for i in group)
+    for group in section.tier_groups:
         print(f"{'─' * 68}")
-        label = f"{header} — {tier['label']}"
-        print(f"  {label}")
-        print(f"  {tier['desc']}")
-        print(f"  {count} items  ~{mr:,} MR")
+        print(f"  {section.header} — {group.label}")
+        print(f"  {group.desc}")
+        print(f"  {group.count} items  ~{group.mr:,} MR")
         print()
 
-        _print_section_table(group)
+        _print_section_table(group.rows)
 
 
-def print_report(
-    total: int,
-    mastered: int,
-    unmastered: list[tuple[dict, int]],
-    in_progress: list[tuple[dict, int]],
-    blueprints_ready: list[tuple[dict, int]] | None = None,
-) -> None:
+def print_report(report: MasteryReport) -> None:
     """Print the full mastery progression report."""
-    br = blueprints_ready or []
-    remaining = len(unmastered) + len(in_progress) + len(br)
+    blueprint_ready = report.sections[0]
+    never_touched = report.sections[1]
+    in_progress = report.sections[2]
 
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
     print("=" * 68)
-    print(f"  {mastered} / {total} masterable items mastered ({mastered * 100 // total}%)")
+    print(f"  {report.mastered} / {report.total} masterable items mastered ({report.percent}%)")
     print(
-        f"  {len(br)} blueprints ready"
-        f"  {len(unmastered)} items never touched"
-        f"  {len(in_progress)} in progress"
-        f"  {remaining} remaining"
+        f"  {blueprint_ready.count} blueprints ready"
+        f"  {never_touched.count} items never touched"
+        f"  {in_progress.count} in progress"
+        f"  {report.remaining} remaining"
     )
-    total_mr = (
-        sum(_item_mr(item) for item, _ in unmastered)
-        + sum(_item_mr(item) for item, _ in in_progress)
-        + sum(_item_mr(item) for item, _ in br)
-    )
-    print(f"  ~{total_mr:,} MR available from unmastered items")
+    print(f"  ~{report.total_mr:,} MR available from unmastered items")
     print()
 
-    _print_mastery_section(
-        "BLUEPRINT READY",
-        "Blueprint owned \u2014 farm materials to build",
-        br,
-        group_by_tier=False,
-    )
-    _print_mastery_section("NEVER TOUCHED", "No XP recorded", unmastered)
-    _print_mastery_section("IN PROGRESS", "Partial XP, not yet max rank", in_progress)
+    for section in report.sections:
+        _print_mastery_section(section)
 
     print("=" * 68)
-    print(f"  {remaining} items remaining  ~{total_mr:,} MR to earn")
+    print(f"  {report.remaining} items remaining  ~{report.total_mr:,} MR to earn")
     print("=" * 68)
 
 
@@ -752,5 +847,4 @@ def main(args) -> None:
         args.refresh,
     )
 
-    total, mastered, unmastered, in_progress, blueprints_ready = analyze_mastery(db, inv)
-    print_report(total, mastered, unmastered, in_progress, blueprints_ready)
+    print_report(build_mastery_report(db, inv))

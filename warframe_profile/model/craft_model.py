@@ -706,6 +706,65 @@ def preserve_blueprints(
     return new_requirements
 
 
+def add_missing_blueprint_requirement(
+    item_un: str,
+    item_name: str,
+    requirements: dict,
+    owned: dict,
+    recipes_by_result: dict,
+) -> dict:
+    """Add the item's own blueprint to *requirements* when it is not owned.
+
+    The crafting summary should always list the blueprint needed to build
+    the requested item, even though the decomposition step only adds
+    blueprints for intermediate craftables.  Shared by the CLI and web
+    views so both report the same requirements.
+    """
+    if owned.get(normalize_path(item_un), 0) >= 1:
+        return requirements
+    recipe = recipes_by_result.get(item_un.lower())
+    if not recipe:
+        return requirements
+    bp_key = recipe.get("_recipeKey", "")
+    if not bp_key:
+        return requirements
+    bp_owned = owned.get(normalize_path(bp_key), 0)
+    if bp_owned < 1:
+        requirements[bp_key.lower()] = {
+            "name": f"{item_name} Blueprint",
+            "quantity": 1,
+            "owned": bp_owned,
+        }
+    return requirements
+
+
+def postprocess_craft_plan(
+    requirements: dict,
+    craftables: dict,
+    owned: dict,
+    items_by_un: dict,
+    recipes_by_result: dict,
+    loc_dict: dict,
+) -> dict:
+    """Apply the standard craft post-processing pipeline.
+
+    This is the single source of truth shared by the CLI and the web view.
+    It computes the corrected crafting plan, decomposes intermediate
+    craftables into raw materials, preserves needed blueprints, and keeps
+    non-blueprint requirements that the decomposition did not cover.
+
+    *requirements* and *craftables* come from :func:`resolve_tree`;
+    *craftables* is mutated in place.  Returns the final requirements dict.
+    """
+    compute_crafting_plan(craftables, owned)
+    processed = decompose_raw_materials(craftables, recipes_by_result, items_by_un, owned, loc_dict)
+    processed = preserve_blueprints(requirements, processed)
+    for key, value in requirements.items():
+        if key not in processed and not is_blueprint_un(key):
+            processed[key] = value
+    return processed
+
+
 # ---------------------------------------------------------------------------
 # Weapon chain analysis
 # ---------------------------------------------------------------------------

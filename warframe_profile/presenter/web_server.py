@@ -15,6 +15,7 @@ All data is loaded once at startup (in ``load_all``) and analysis results
 are computed lazily when first requested.
 """
 
+import html
 import http.server
 import json
 import os
@@ -50,6 +51,7 @@ from warframe_profile.model.craft_model import (
     build_weapon_chains,
     find_items,
 )
+from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
 from warframe_profile.model.foundry_export import (
     build_foundry_export,
     steel_settings_from_xp,
@@ -57,10 +59,13 @@ from warframe_profile.model.foundry_export import (
 from warframe_profile.model.inventory import (
     EQUIPMENT_SECTIONS,
     ExportDB,
+    build_mastered_set,
     build_owned,
     load_inventory_with_fallback,
 )
 from warframe_profile.model.utils import normalize_path
+from warframe_profile.presenter.mastery import MasteryReport, build_mastery_report
+from warframe_profile.presenter.missing_mods import ModsReport, build_mods_report
 from warframe_profile.view.web.templates import (
     render_cleanup_excess,
     render_cleanup_rebuy,
@@ -71,6 +76,8 @@ from warframe_profile.view.web.templates import (
     render_ducats_missing,
     render_ducats_sell,
     render_home,
+    render_mastery,
+    render_mods,
     render_relics_needed,
     render_relics_safe,
     render_weapon_chains,
@@ -78,11 +85,15 @@ from warframe_profile.view.web.templates import (
 
 
 def _parse_port() -> int:
-    """Parse the ``WARFRAME_WEB_PORT`` env var, falling back to 8080."""
+    """Parse the ``WARFRAME_WEB_PORT`` env var, falling back to 8090.
+
+    8090 is used rather than the more common 8080 because Steam's
+    ``steamwebhelper`` listens on 8080 on many players' machines.
+    """
     try:
-        return int(os.environ.get("WARFRAME_WEB_PORT", "8080"))
+        return int(os.environ.get("WARFRAME_WEB_PORT", "8090"))
     except ValueError:
-        return 8080
+        return 8090
 
 
 PORT = _parse_port()
@@ -107,6 +118,7 @@ class DataCache:
     db: ExportDB | None = None
     inventory: dict = {}
     owned: dict = {}
+    mastered: set[str] = set()
     items_by_un: dict = {}
     recipes_by_result: dict = {}
     loc_dict: dict = {}
@@ -124,6 +136,8 @@ class DataCache:
     weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
     foundry_export: dict | None = None
     foundry_settings: tuple | None = None
+    mastery_report: MasteryReport | None = None
+    mods_report: ModsReport | None = None
 
 
 _cache = DataCache()
@@ -160,6 +174,7 @@ def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
     """
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
     _cache.inventory = inv
+    _cache.mastered = build_mastered_set(inv)
     _cache.owned = build_owned(inv, _require_db().raw.get("recipes", {}))
 
 
@@ -177,6 +192,8 @@ def invalidate_analysis() -> None:
     _cache.weapon_chains = None
     _cache.foundry_export = None
     _cache.foundry_settings = None
+    _cache.mastery_report = None
+    _cache.mods_report = None
 
 
 def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> None:
@@ -196,7 +213,9 @@ def _ensure_owned_state():
     if _cache.owned_finished is None or _cache.extra_builds is None:
         _ensure_prime_map()
         assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-        _cache.owned_finished = compute_owned_finished(_cache.inventory, EQUIPMENT_SECTIONS, None)
+        _cache.owned_finished = compute_owned_finished(
+            _cache.inventory, EQUIPMENT_SECTIONS, _cache.mastered
+        )
         _cache.extra_builds = compute_extra_builds(
             _cache.prime_map, _cache.owned, _cache.owned_finished
         )
@@ -214,10 +233,12 @@ def _ensure_analysis():
         _ensure_prime_map()
         _ensure_owned_state()
         assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
+        prime_map = _cache.prime_map
         _cache.analysis_result = analyze(
             _cache.inventory,
-            _cache.prime_map,
+            prime_map,
             EQUIPMENT_SECTIONS,
+            mastered=_cache.mastered,
             recipes=_require_db().recipes,
             owned=_cache.owned,
             owned_finished=_cache.owned_finished,
@@ -228,10 +249,12 @@ def _ensure_analysis():
             _cache.inventory,
             EQUIPMENT_SECTIONS,
         )
+        # CLI parity: print_report reads sellable off the analysis result.
+        _cache.analysis_result.sellable = _cache.sellable
         item_index = build_item_index(items)
         reg_to_prime = build_regular_to_prime_map(items)
         owned_regular = find_owned_item_uns(_cache.inventory, item_index, EQUIPMENT_SECTIONS)
-        owned_primes = find_owned_prime_uns(_cache.inventory, item_index, EQUIPMENT_SECTIONS)
+        owned_primes = find_owned_prime_uns(_cache.inventory, prime_map, EQUIPMENT_SECTIONS)
         _cache.owned_prime_pairs = []
         for reg_un in owned_regular:
             pi = reg_to_prime.get(reg_un)
@@ -262,6 +285,7 @@ def _ensure_excess():
             _cache.owned,
             _cache.owned_finished,
             _cache.loc_dict,
+            mastered=_cache.mastered,
         )
 
 
@@ -281,6 +305,7 @@ def _ensure_relics():
             _cache.prime_map,
             _cache.owned,
             EQUIPMENT_SECTIONS,
+            mastered=_cache.mastered,
             owned_finished=_cache.owned_finished,
             extra_builds=_cache.extra_builds,
         )
@@ -290,6 +315,7 @@ def _ensure_relics():
             _cache.prime_map,
             _cache.owned,
             EQUIPMENT_SECTIONS,
+            mastered=_cache.mastered,
             owned_finished=_cache.owned_finished,
             extra_builds=_cache.extra_builds,
         )
@@ -307,6 +333,7 @@ def _ensure_weapon_chains():
             _cache.recipes_by_result,
             _cache.owned,
             _cache.loc_dict,
+            mastered=_cache.mastered,
         )
 
 
@@ -323,6 +350,26 @@ def _ensure_foundry_export(settings: dict | None):
         )
         _cache.foundry_settings = key
         return _cache.foundry_export
+
+
+def _ensure_mastery():
+    """Lazy-load the mastery progression report."""
+    if _cache.mastery_report is not None:
+        return
+    with _cache_lock:
+        if _cache.mastery_report is not None:
+            return
+        _cache.mastery_report = build_mastery_report(_require_db(), _cache.inventory)
+
+
+def _ensure_mods():
+    """Lazy-load the missing-mods report."""
+    if _cache.mods_report is not None:
+        return
+    with _cache_lock:
+        if _cache.mods_report is not None:
+            return
+        _cache.mods_report = build_mods_report(_require_db(), _cache.inventory)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +464,18 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             ),
         )
 
+    def _handle_mastery(self):
+        """Serve the mastery progression view."""
+        _ensure_mastery()
+        assert _cache.mastery_report is not None  # guaranteed by _ensure_mastery
+        self._html(200, render_mastery(_cache.mastery_report))
+
+    def _handle_mods(self):
+        """Serve the missing-mods view."""
+        _ensure_mods()
+        assert _cache.mods_report is not None  # guaranteed by _ensure_mods
+        self._html(200, render_mods(_cache.mods_report))
+
     def _handle_foundry_export(self, params: dict):
         """Serve the Warframe Foundry import file as a JSON download.
 
@@ -481,6 +540,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             /relics[/...]   → Relic analysis (needed drops / safe-to-spam)
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
+            /mastery        → Mastery progression (blueprint ready, gaps)
+            /mods           → Missing mods by in-game category
             /cleanup[/...]  → Inventory cleanup (rebuy / sell / excess)
             /foundry-export → Download Warframe Foundry import file (JSON)
         """
@@ -499,6 +560,10 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_craft((params.get("q") or [""])[0].strip())
             elif path == "/weapon-chains":
                 self._handle_weapon_chains()
+            elif path == "/mastery":
+                self._handle_mastery()
+            elif path == "/mods":
+                self._handle_mods()
             elif path.startswith("/cleanup"):
                 self._handle_cleanup(path.removeprefix("/cleanup"))
             elif path == "/foundry-export":
@@ -518,9 +583,21 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/refresh":
             inv_path = os.path.join(DATA_DIR, "inventory.json")
-            with _cache_lock:
-                reload_inventory(inv_path, refresh=True)
-                invalidate_analysis()
+            try:
+                with _cache_lock:
+                    reload_inventory(inv_path, refresh=True)
+                    invalidate_analysis()
+            except (WarframeNotRunningError, InventoryFetchError) as exc:
+                message = html.escape(str(exc))
+                self._html(
+                    503,
+                    f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<title>Refresh failed</title></head><body>
+<h1>Inventory refresh failed</h1><p>{message}</p>
+<p>Your cached data is unchanged.</p><p><a href="/">Back to home</a></p>
+</body></html>""",
+                )
+                return
             self._redirect("/")
         else:
             self._html(404, "<h1>404 Not Found</h1>")
@@ -536,7 +613,7 @@ def main(args) -> None:
     items_cache = getattr(args, "items_cache", "") or os.path.join(DATA_DIR, "export_db.json")
     inv_path = getattr(args, "inventory", "") or os.path.join(DATA_DIR, "inventory.json")
     refresh = getattr(args, "refresh", False)
-    port = getattr(args, "port", PORT)
+    port = getattr(args, "port", None) or PORT
 
     print("[web] Loading data…", file=sys.stderr)
     load_all(items_cache, inv_path, refresh)
@@ -546,7 +623,16 @@ def main(args) -> None:
         allow_reuse_address = True
         daemon_threads = True
 
-    with ThreadedServer(("0.0.0.0", port), WarframeHandler) as httpd:
+    try:
+        server = ThreadedServer(("0.0.0.0", port), WarframeHandler)
+    except OSError as exc:
+        print(
+            f"[web] Could not bind port {port}: {exc}. Use --port or set WARFRAME_WEB_PORT.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+
+    with server as httpd:
         print(f"[web] Serving at http://0.0.0.0:{port}", file=sys.stderr)
         try:
             httpd.serve_forever()
