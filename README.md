@@ -68,10 +68,10 @@ The `Makefile` wraps the common workflows:
 | `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
 | `make check` | Lint + format check (CI-friendly) |
 | `make update` | Refresh the merged game database |
-| `make linux` | Build the one-file Linux executable at `dist/linux/warframe` |
+| `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe` |
 | `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
 | `make uninstall-linux` | Remove the installed Linux executable |
-| `make windows` | Cross-build `dist/windows/warframe.exe` through Wine |
+| `make build-windows` | Cross-build `dist/windows/warframe.exe` through Wine |
 | `make wine-setup` | Install Windows Python + PyInstaller in the Wine prefix |
 | `make clean-build` | Remove `dist/` and `build/` |
 | `make clean-wine` | Remove the Wine build prefix |
@@ -84,7 +84,7 @@ make install-linux DESTDIR=/tmp/pkgroot
 make install-linux BINDIR="$HOME/bin"
 ```
 
-`make windows` uses Wine and downloads a 64-bit Windows Python into
+`make build-windows` uses Wine and downloads a 64-bit Windows Python into
 `.wine-build/` on first use. Override the prefix with
 `WINEPREFIX=/path/to/prefix` to reuse an existing one. The target is
 optional: the GitHub Actions workflow produces the same `.exe` on a
@@ -112,7 +112,7 @@ would miss.
 **Linux**
 
 ```bash
-make linux          # -> dist/linux/warframe
+make build-linux    # -> dist/linux/warframe
 make install-linux  # -> ~/.local/bin/warframe
 ```
 
@@ -132,7 +132,7 @@ bundled interpreter must be 64-bit for live scanning.
 **Windows (cross-build from Linux)**
 
 ```bash
-make windows  # -> dist/windows/warframe.exe
+make build-windows  # -> dist/windows/warframe.exe
 ```
 
 This requires Wine and downloads a 64-bit Windows Python on first use.

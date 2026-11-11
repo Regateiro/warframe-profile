@@ -1,9 +1,9 @@
 # Warframe Profile — development, packaging, and installation tasks.
 #
 #   make install        # set up the Poetry virtualenv (dev tools included)
-#   make linux          # build dist/linux/warframe (one-file executable)
+#   make build-linux    # build dist/linux/warframe (one-file executable)
 #   make install-linux  # build and install it to $(BINDIR) (default ~/.local/bin)
-#   make windows        # cross-build dist/windows/warframe.exe via Wine
+#   make build-windows  # cross-build dist/windows/warframe.exe via Wine
 #   make run ARGS=ducats
 #   make check
 #   make clean
@@ -23,7 +23,7 @@ BUILD ?= build
 BINDIR  ?= $(HOME)/.local/bin
 DESTDIR ?=
 
-#: Windows cross-build settings (used by `make windows`).
+#: Windows cross-build settings (used by `make build-windows`).
 #: The default installs 64-bit Python into a local Wine prefix on first use.
 WINEPREFIX         ?= $(CURDIR)/.wine-build
 WIN_PYTHON_NAME    ?= Python312
@@ -34,7 +34,7 @@ WIN_PYTHON_EXE     ?= $(WINEPREFIX)/drive_c/$(WIN_PYTHON_NAME)/python.exe
 WIN_INSTALLER      ?= $(WINEPREFIX)/python-$(WIN_PYTHON_VERSION)-amd64.exe
 
 .PHONY: help install update run lint format check clean clean-data \
-	build-deps linux install-linux uninstall-linux wine-setup windows clean-build clean-wine
+	build-deps build-linux install-linux uninstall-linux wine-setup build-windows clean-build clean-wine
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target> [ARGS=...]\n\nTargets:\n"} \
@@ -43,7 +43,7 @@ help: ## Show this help
 	@printf "  make run ARGS='--ducats --refresh'\n"
 	@printf "  make run ARGS='--craft \"Acceltra Prime\" --depth 3'\n"
 	@printf "  make install-linux\n"
-	@printf "  make windows\n\n"
+	@printf "  make build-windows\n\n"
 
 install: ## Install the project into the Poetry virtualenv (dev tools included)
 	$(POETRY) install --extras dev
@@ -69,16 +69,16 @@ check: ## Verify formatting and lint without modifying files (CI-friendly)
 # Linux executable
 # ---------------------------------------------------------------------------
 
-build-deps: ## Install PyInstaller into the Poetry environment (used by `make linux`)
+build-deps: ## Install PyInstaller into the Poetry environment (used by `make build-linux`)
 	@$(POETRY) run python -c 'import PyInstaller' 2>/dev/null || \
 		$(POETRY) run python -m pip install --disable-pip-version-check -q pyinstaller
 
-linux: build-deps ## Build a one-file Linux executable at dist/linux/warframe
+build-linux: build-deps ## Build a one-file Linux executable at dist/linux/warframe
 	$(POETRY) run python -m PyInstaller --clean --noconfirm \
 		--distpath "$(DIST)/linux" --workpath "$(BUILD)/linux" warframe.spec
 	@printf '\nBuilt %s\n' "$(DIST)/linux/warframe"
 
-install-linux: linux ## Build and install the Linux executable to $(BINDIR)
+install-linux: build-linux ## Build and install the Linux executable to $(BINDIR)
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 755 "$(DIST)/linux/warframe" "$(DESTDIR)$(BINDIR)/warframe"
 	@printf '\nInstalled %s\n' "$(DESTDIR)$(BINDIR)/warframe"
@@ -90,7 +90,7 @@ uninstall-linux: ## Remove the installed Linux executable
 # Windows executable (cross-build via Wine)
 # ---------------------------------------------------------------------------
 
-wine-setup: ## Install Windows Python + PyInstaller in the Wine prefix (used by `make windows`)
+wine-setup: ## Install Windows Python + PyInstaller in the Wine prefix (used by `make build-windows`)
 	@command -v "$(WINE)" >/dev/null || { \
 		echo "error: wine not found; install Wine to cross-build the Windows executable" >&2; \
 		exit 1; \
@@ -116,7 +116,7 @@ wine-setup: ## Install Windows Python + PyInstaller in the Wine prefix (used by 
 			-m pip install --disable-pip-version-check -q .; \
 	fi
 
-windows: wine-setup ## Cross-build dist/windows/warframe.exe (requires Wine)
+build-windows: wine-setup ## Cross-build dist/windows/warframe.exe (requires Wine)
 	WINEPREFIX="$(WINEPREFIX)" WINEDEBUG=-all $(WINE) '$(WIN_PYTHON)' \
 		-m PyInstaller --clean --noconfirm \
 		--distpath "$(DIST)/windows" --workpath "$(BUILD)/windows" warframe.spec
