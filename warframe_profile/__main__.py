@@ -139,6 +139,12 @@ def main() -> int:
             return 1
         return 0
 
+    # Verify that the export database exists (or refresh it if requested).
+    if not os.path.exists(args.items_cache):
+        from warframe_profile.scripts.update_export_db import main as update_main
+
+        update_main(args)
+
     # No sub-command: open the web UI, which mirrors the CLI analyses.
     if not args.command:
         args.command = "serve"
