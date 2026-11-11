@@ -9,6 +9,8 @@ import os
 import sys
 
 from warframe_profile import DATA_DIR, DEFAULT_ACCOUNT_ID
+from warframe_profile.compat import configure_stdio
+from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
 from warframe_profile.model.inventory import load_inventory_with_fallback
 
 #: Maps sub-command names to (module_path, function_name) pairs.
@@ -116,13 +118,18 @@ def main() -> int:
     Returns:
         Exit code (0 on success, 1 on error).
     """
+    configure_stdio()
     parser = _build_parser()
     args = parser.parse_args()
 
     # Standalone --refresh (no sub-command): just fetch inventory and exit.
     if args.refresh and not args.command:
         inv_path = args.inventory or os.path.join(DATA_DIR, "inventory.json")
-        load_inventory_with_fallback(inv_path, refresh=True)
+        try:
+            load_inventory_with_fallback(inv_path, refresh=True)
+        except (WarframeNotRunningError, InventoryFetchError) as exc:
+            print(f"  Error: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     # Dynamic import and dispatch to the target module.

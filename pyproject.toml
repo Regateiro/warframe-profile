@@ -15,8 +15,8 @@ dev = ["ruff"]
 [project.scripts]
 warframe = "warframe_profile.__main__:main"
 
-[tool.setuptools]
-packages = ["warframe_profile", "warframe_profile.scripts"]
+[tool.setuptools.packages.find]
+include = ["warframe_profile*"]
 
 [tool.ruff]
 target-version = "py310"

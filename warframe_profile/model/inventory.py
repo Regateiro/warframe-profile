@@ -2,8 +2,9 @@
 
 This module is the **data source** for the entire application.  It provides:
 
-1. Memory scanning of the running Warframe Linux process to extract the
-   player's ``accountId`` and ``nonce`` (used for API authentication).
+1. Memory scanning of the running Warframe process (Linux ``/proc`` or
+   the Windows Win32 API) to extract the player's ``accountId`` and
+   ``nonce`` (used for API authentication).
 2. HTTP fetching of the DE inventory API using those credentials.
 3. Cached loading / saving of inventory JSON to disk.
 4. Utility functions (:func:`build_owned`, :func:`build_mastered_set`, etc.)
@@ -11,9 +12,10 @@ This module is the **data source** for the entire application.  It provides:
 
 Two data-fetching strategies are supported:
 
-* **Live scan** — reads the running Warframe process's memory via
-  ``/proc/<pid>/mem`` to discover the player's ``accountId`` and
-  ``nonce``, then calls the official DE inventory API.
+* **Live scan** — reads the running Warframe process's memory (via the
+  platform backend in :mod:`warframe_profile.model.scanner`) to discover
+  the player's ``accountId`` and ``nonce``, then calls the official DE
+  inventory API.
 * **Cached** — loads a previously saved ``inventory.json`` file.
 
 Shared helpers (:func:`build_owned`, :func:`load_items`,
@@ -30,6 +32,13 @@ import urllib.request
 from collections import defaultdict
 
 from warframe_profile import HTTP_TIMEOUT, USER_AGENT_DE
+from warframe_profile.model.errors import (
+    InventoryFetchError,
+    ItemCacheNotFoundError,
+    ProfileNotFoundError,
+    WarframeNotRunningError,
+)
+from warframe_profile.model.scanner import find_in_memory, find_warframe_pid
 from warframe_profile.model.utils import normalize_path
 
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
@@ -38,11 +47,9 @@ INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={
 #: DE profile viewing API endpoint.  Format with ``playerId``.
 PROFILE_URL = "http://content.warframe.com/dynamic/getProfileViewingData.php?playerId={}"
 
-#: Warframe process name used for PID detection on Linux (Wine/Proton).
-WARFRAME_PROCESS_NAME = "Warframe.x64.exe"
-
 #: Regex for extracting accountId and nonce from the Warframe process URL.
 _CREDENTIAL_RE = re.compile(r"accountId=([a-z0-9]+)&nonce=(\d+)")
+
 
 #: Inventory section keys for mod data.
 MOD_SECTIONS: tuple[str, ...] = ("RawUpgrades", "Upgrades", "FocusUpgrades")
@@ -72,25 +79,9 @@ EQUIPMENT_SECTIONS: list[str] = [
 
 
 # ---------------------------------------------------------------------------
-# Custom exceptions — each maps to a distinct failure mode so callers can
-# catch exactly what they need.
+# Custom exceptions are defined in ``model.errors`` and re-exported here so
+# existing imports keep working.  Each maps to a distinct failure mode.
 # ---------------------------------------------------------------------------
-
-
-class WarframeNotRunningError(RuntimeError):
-    """Raised when no Warframe process can be found in ``/proc``."""
-
-
-class InventoryFetchError(RuntimeError):
-    """Raised when the DE inventory API returns an error or is unreachable."""
-
-
-class ItemCacheNotFoundError(FileNotFoundError):
-    """Raised when the local item export database does not exist."""
-
-
-class ProfileNotFoundError(RuntimeError):
-    """Raised when the DE profile viewing API returns no data."""
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +147,7 @@ class ExportDB:
                 f"Item cache not found at {self._path}. Run --update first."
             )
         try:
-            with open(self._path) as f:
+            with open(self._path, encoding="utf-8") as f:
                 self._data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             raise ItemCacheNotFoundError(
@@ -209,105 +200,17 @@ class ExportDB:
 # ---------------------------------------------------------------------------
 # Warframe process memory scanning
 # ---------------------------------------------------------------------------
-# Live inventory fetching requires authentication credentials (accountId and
-# nonce) that the game stores in its process memory.  We scan /proc/<pid>/mem
-# to find them — this is the same technique used by the Warframe community
-# tools like "Inventory Inspector" and "AlecaFrame".
+# The platform-specific implementations live in ``model/scanner`` and are
+# re-exported above (``find_warframe_pid``, ``find_in_memory``).  Live
+# inventory fetching requires authentication credentials (accountId and
+# nonce) that the game stores in its process memory — the same technique
+# used by community tools like "Inventory Inspector" and "AlecaFrame".
 #
 # Flow:
-#   1. find_warframe_pid() — locate the process by scanning /proc.
-#   2. find_in_memory() — binary search of the address space for an ASCII key.
+#   1. find_warframe_pid() — locate the process (Linux /proc or Win32 API).
+#   2. find_in_memory() — search the address space for an ASCII key.
 #   3. _find_credentials_in_memory() — extract accountId + nonce from matches.
 #   4. fetch_inventory() — use credentials to call the DE API.
-
-
-def find_warframe_pid() -> int:
-    """Return the PID of the running Warframe process.
-
-    Scans ``/proc/<pid>/cmdline`` for ``Warframe.x64.exe``.
-    Non-digit /proc entries are skipped (kernel threads, etc.).
-
-    Raises:
-        WarframeNotRunningError: if no matching process is found.
-    """
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        raise WarframeNotRunningError(
-            "Warframe process not found. Live inventory needs Linux /proc; "
-            "launch the game and reach the Orbiter."
-        ) from None
-    for pid_str in entries:
-        if not pid_str.isdigit():
-            continue
-        try:
-            with open(f"/proc/{pid_str}/cmdline") as f:
-                cmd = f.read()
-            if WARFRAME_PROCESS_NAME in cmd:
-                return int(pid_str)
-        except OSError:
-            pass
-    raise WarframeNotRunningError(
-        "Warframe process not found. Launch the game and reach the Orbiter."
-    )
-
-
-def find_in_memory(
-    pid: int,
-    pattern: str,
-    context: int = 256,
-    max_per_region: int = 64 * 1024 * 1024,
-) -> tuple[int | None, bytes | None]:
-    """Search a process's address space for an ASCII *pattern*.
-
-    Works by reading ``/proc/<pid>/maps`` to enumerate memory regions,
-    then scanning each readable region in ``/proc/<pid>/mem``.
-    Large anonymous (heap) regions are clamped to *max_per_region*;
-    file-backed regions are clamped to 8 MiB — this avoids pathological
-    scan times while still finding the credential strings.
-
-    Args:
-        pid: Target process ID.
-        pattern: ASCII string to locate.
-        context: Number of extra bytes to return around the match.
-        max_per_region: Maximum bytes to scan per memory region.
-
-    Returns:
-        ``(address, surrounding_bytes)`` or ``(None, None)``.
-    """
-    p = pattern.encode("ascii")
-    try:
-        with open(f"/proc/{pid}/maps") as f:
-            regions: list[list[str]] = [line.split() for line in f]
-    except OSError:
-        return (None, None)  # /proc unavailable (non-Linux or no access) → no match
-
-    for parts in regions:
-        perms = parts[1]
-        if "r" not in perms:
-            continue
-        start_str, end_str = parts[0].split("-")
-        start = int(start_str, 16)
-        end = int(end_str, 16)
-
-        # Anonymous (heap) regions are scanned up to max_per_region;
-        # file-backed regions are limited to 8 MiB.
-        is_anon = len(parts) < 6 or parts[-1].startswith("[") or parts[-1] == ""
-        limit = max_per_region if is_anon else min(end - start, 8 * 1024 * 1024)
-        chunk_size = min(end - start, limit)
-
-        try:
-            with open(f"/proc/{pid}/mem", "rb") as mem:
-                mem.seek(start)
-                data = mem.read(chunk_size)
-                idx = data.find(p)
-                if idx != -1:
-                    lo = max(0, idx - context)
-                    hi = min(len(data), idx + context)
-                    return start + idx, data[lo:hi]
-        except (OSError, PermissionError):
-            pass
-    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +280,7 @@ def load_inventory(path: str) -> dict:
     not specified.
     """
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         raise InventoryFetchError(f"Could not load inventory cache {path}: {exc}") from exc
@@ -614,7 +517,9 @@ def load_inventory_with_fallback(
     if refresh or not os.path.exists(inv_path):
         inv, account_id = fetch_inventory()
         try:
-            with open(inv_path, "w") as f:
+            parent = os.path.dirname(os.path.abspath(inv_path))
+            os.makedirs(parent, exist_ok=True)
+            with open(inv_path, "w", encoding="utf-8") as f:
                 json.dump(inv, f, indent=2)
         except OSError as exc:
             print(f"warning: could not save inventory cache {inv_path}: {exc}", file=sys.stderr)

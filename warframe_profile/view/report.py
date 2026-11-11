@@ -23,6 +23,7 @@ from typing import Literal
 
 from prettytable import PrettyTable, TableStyle
 
+from warframe_profile.compat import color_enabled, enable_windows_vt
 from warframe_profile.model.analysis import (
     AnalysisResult,
     ExcessItem,
@@ -386,10 +387,15 @@ def section_items_with_owned_prime(
 # Craft-tree view
 # ---------------------------------------------------------------------------
 
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-RESET = "\033[0m"
+# ANSI colour is emitted only for an interactive terminal (or FORCE_COLOR).
+# ``enable_windows_vt`` makes classic Windows consoles understand the codes;
+# otherwise they would print literal escape sequences.
+enable_windows_vt()
+_COLOR = color_enabled()
+GREEN = "\033[92m" if _COLOR else ""
+RED = "\033[91m" if _COLOR else ""
+YELLOW = "\033[93m" if _COLOR else ""
+RESET = "\033[0m" if _COLOR else ""
 
 
 def craft_color_for_owned(owned_qty: int, needed: int) -> str:

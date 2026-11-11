@@ -2,19 +2,29 @@
 
 Packages the analysis, CLI, and data-fetching modules under a single
 namespace.  The only top-level export is DATA_DIR, which points at the
-per-user data directory under ``$HOME/.local/share``.
+per-user data directory (``~/.local/share`` on Linux, ``%LOCALAPPDATA%``
+on Windows).
 """
 
 import os
 
+
+def _default_data_dir() -> str:
+    """Return the platform-appropriate per-user data directory."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local"
+        )
+        return os.path.join(base, "warframe-profile")
+    return os.path.expanduser(os.path.join("~", ".local", "share", "warframe-profile"))
+
+
 #: Absolute path to the per-user data directory where cached inventory
 #: JSON, export-database dumps, and similar files live.
-#: Defaults to ``~/.local/share/warframe-profile``; override with the
+#: Defaults to ``~/.local/share/warframe-profile`` on Linux/macOS and
+#: ``%LOCALAPPDATA%\\warframe-profile`` on Windows; override with the
 #: ``WARFRAME_DATA_DIR`` environment variable.
-DATA_DIR = os.environ.get(
-    "WARFRAME_DATA_DIR",
-    os.path.expanduser(os.path.join("~", ".local", "share", "warframe-profile")),
-)
+DATA_DIR = os.environ.get("WARFRAME_DATA_DIR") or _default_data_dir()
 
 #: Default DE account ID used for profile display fallback.
 DEFAULT_ACCOUNT_ID = "57c71e613ade7fa2a211997b"

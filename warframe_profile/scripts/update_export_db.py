@@ -383,7 +383,7 @@ def main(args=None) -> None:
         out_dir = os.path.dirname(out_path)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        with open(out_path, "w") as f:
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(merged, f, separators=(",", ":"))
     except OSError as e:
         print(f"  Error: could not write {out_path}: {e}", file=sys.stderr)

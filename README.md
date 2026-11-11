@@ -30,16 +30,44 @@ Additional highlights:
 ## Requirements
 
 - Python 3.10+
-- Linux (uses `/proc/<pid>/mem` for process memory scanning)
+- Linux (including Warframe under Wine/Proton) or Windows 10/11
+- On Windows, a **64-bit** Python interpreter (Warframe is a 64-bit
+  process; a 32-bit interpreter cannot read its memory)
 - Warframe must be running and in the Orbiter for live inventory fetching
+
+Live inventory scanning works by reading the game process's memory:
+Linux uses `/proc`, Windows uses the Win32 API (`OpenProcess` /
+`ReadProcessMemory`). On Windows the tool normally runs with the same
+privileges as the game; if the game was launched elevated, run the tool
+as Administrator too.
 
 ## Installation
 
 ```bash
 git clone <repo-url> warframe-profile
 cd warframe-profile
-pip install prettytable
+python -m pip install -e .
 ```
+
+This installs `prettytable` plus the `warframe` console command. You can
+also run the project directly with `python warframe.py`, which only needs
+`prettytable` installed (`python -m pip install prettytable`).
+
+On Windows, use `py -3` (or `python`) in place of `python3`. The
+`Makefile` targets are Unix-only (they require `bash`, `find`, and `rm`);
+use the `python warframe.py` commands below instead.
+
+### Data directory
+
+Cached databases and exports are stored per user:
+
+| Platform | Default path |
+|---|---|
+| Linux / macOS | `~/.local/share/warframe-profile/` |
+| Windows | `%LOCALAPPDATA%\warframe-profile\` |
+
+Set the `WARFRAME_DATA_DIR` environment variable to override it. The
+directory is created automatically when data is first written.
 
 ## Usage
 
@@ -55,7 +83,8 @@ python warframe.py --update
 ```
 
 Downloads ~40 JSON files from Digital Extremes' public export and the
-WFCD community item database, merging them into `~/.local/share/warframe-profile/export_db.json`.
+WFCD community item database, merging them into
+`export_db.json` in the per-user data directory (see [Data directory](#data-directory)).
 
 ### Prime-part / ducats analysis
 
@@ -103,6 +132,10 @@ The tree uses colour-coded output:
 - <span style="color:yellow">**Yellow**</span> — you have some but not enough.
 - <span style="color:red">**Red**</span> — you have none.
 
+Colour is used automatically for interactive terminals (including Windows
+Terminal and classic consoles) and is disabled when output is redirected.
+Set `FORCE_COLOR=1` to keep it in a pipe or `NO_COLOR=1` to turn it off.
+
 ### Inventory cleanup
 
 ```bash
@@ -119,7 +152,7 @@ Shows two sections:
 ### Export for Warframe Foundry
 
 ```bash
-# Write ~/.local/share/warframe-profile/warframe-foundry.json from the cached inventory:
+# Write warframe-foundry.json to the data directory from the cached inventory:
 python warframe.py foundry
 
 # Live inventory scan (Warframe must be running):
@@ -167,7 +200,7 @@ same file.
 - **WFCD Items**: [`https://github.com/WFCD/warframe-items`](https://github.com/WFCD/warframe-items)
 
 The `--update` command downloads both sources and merges them into
-`~/.local/share/warframe-profile/export_db.json`.  The merge enriches DE items with fields from
+`export_db.json` in the per-user data directory.  The merge enriches DE items with fields from
 WFCD (e.g., `isPrime`, `marketCost`, `components` with ducat values)
 and adds WFCD-only Prime items not present in the DE export.
 
@@ -179,8 +212,13 @@ warframe-profile/
   warframe_profile/
     __init__.py                              # Package init, DATA_DIR
     __main__.py                              # Sub-command dispatcher (--craft/--ducats/...)
+    compat.py                                # UTF-8 stdio, ANSI/colour platform helpers
     model/                                   # Data layer: inventory, export DB, analysis
-      inventory.py                           # Memory scanning, API fetching, shared helpers
+      errors.py                              # Shared exception types
+      scanner/                               # Live process scanning backends
+        linux.py                             # /proc backend
+        windows.py                           # Win32 API backend (ctypes)
+      inventory.py                           # API fetching, cache, shared helpers
       analysis.py                            # Prime-map indexing & cross-reference analysis
       craft_model.py                         # Item/recipe indices for the craft tree
       foundry_export.py                      # Warframe Foundry import-file builder
@@ -199,7 +237,8 @@ warframe-profile/
     scripts/
       update_export_db.py                    # --update: download & merge export data
 
-~/.local/share/warframe-profile/            # Per-user data dir (override: $WARFRAME_DATA_DIR)
+~/.local/share/warframe-profile/            # Linux/macOS data dir
+%LOCALAPPDATA%\warframe-profile\            # Windows data dir
   export_db.json                           # Merged item database (generated)
   inventory.json                           # Cached inventory (generated)
   warframe-foundry.json                    # Foundry import file (generated by `foundry`)

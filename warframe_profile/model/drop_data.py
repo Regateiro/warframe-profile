@@ -62,7 +62,7 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
         age_hours = (time.time() - os.path.getmtime(cache_path)) / 3600
         if age_hours < 24:
             try:
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     data = json.load(f)
                 _memo = (cache_mtime, False)
                 _memo_value = _build_lookup(data)
@@ -82,7 +82,7 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
 
         # Cache to disk
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, "w") as f:
+        with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(raw, f)
 
         _memo = (os.path.getmtime(cache_path), False)
@@ -92,7 +92,7 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
         print(f"Warning: could not fetch mod drop data: {exc}", file=sys.stderr)
         # Try stale cache
         if os.path.exists(cache_path):
-            with open(cache_path) as f:
+            with open(cache_path, encoding="utf-8") as f:
                 data = json.load(f)
             _memo = (cache_mtime, False)
             _memo_value = _build_lookup(data)

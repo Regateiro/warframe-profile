@@ -54,4 +54,4 @@ clean: ## Remove Python and ruff caches
 	rm -rf .ruff_cache
 
 clean-data: ## Remove generated data files (export db + inventory cache)
-	rm -f ~/.local/share/warframe-profile/*.json
+	rm -f "$$($(POETRY) run python -c 'from warframe_profile import DATA_DIR; print(DATA_DIR)')"/*.json
