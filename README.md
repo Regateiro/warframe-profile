@@ -54,8 +54,41 @@ also run the project directly with `python warframe.py`, which only needs
 `prettytable` installed (`python -m pip install prettytable`).
 
 On Windows, use `py -3` (or `python`) in place of `python3`. The
-`Makefile` targets are Unix-only (they require `bash`, `find`, and `rm`);
-use the `python warframe.py` commands below instead.
+`Makefile` packaging targets require `bash`, `find`, and `rm`, so run
+them on Linux/macOS (WSL or Git Bash also works); on native Windows use
+the `python -m PyInstaller` commands below instead.
+
+### Makefile targets
+
+The `Makefile` wraps the common workflows:
+
+| Target | Description |
+|---|---|
+| `make install` | Install into the Poetry virtualenv (dev tools included) |
+| `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
+| `make check` | Lint + format check (CI-friendly) |
+| `make update` | Refresh the merged game database |
+| `make linux` | Build the one-file Linux executable at `dist/linux/warframe` |
+| `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
+| `make uninstall-linux` | Remove the installed Linux executable |
+| `make windows` | Cross-build `dist/windows/warframe.exe` through Wine |
+| `make wine-setup` | Install Windows Python + PyInstaller in the Wine prefix |
+| `make clean-build` | Remove `dist/` and `build/` |
+| `make clean-wine` | Remove the Wine build prefix |
+
+`make install-linux` honours `DESTDIR` for staged installs and
+`BINDIR` to change the destination:
+
+```bash
+make install-linux DESTDIR=/tmp/pkgroot
+make install-linux BINDIR="$HOME/bin"
+```
+
+`make windows` uses Wine and downloads a 64-bit Windows Python into
+`.wine-build/` on first use. Override the prefix with
+`WINEPREFIX=/path/to/prefix` to reuse an existing one. The target is
+optional: the GitHub Actions workflow produces the same `.exe` on a
+genuine Windows runner.
 
 ### Data directory
 
@@ -68,6 +101,45 @@ Cached databases and exports are stored per user:
 
 Set the `WARFRAME_DATA_DIR` environment variable to override it. The
 directory is created automatically when data is first written.
+
+### Single-file executables
+
+PyInstaller can bundle the tool into one self-contained executable (no
+Python installation needed on the target machine). The spec collects the
+dynamically imported sub-command modules, which static analysis alone
+would miss.
+
+**Linux**
+
+```bash
+make linux          # -> dist/linux/warframe
+make install-linux  # -> ~/.local/bin/warframe
+```
+
+**Windows (native)**
+
+```bat
+py -3 -m pip install pyinstaller
+py -3 -m PyInstaller --clean --noconfirm warframe.spec
+```
+
+The executable is written to `dist\warframe.exe`. PyInstaller does not
+cross-compile, so build it on Windows (or run the **Build Windows
+executable** GitHub Actions workflow manually from the Actions tab, or
+push a `v*` tag; it uploads the artifact). Use a 64-bit Python: the
+bundled interpreter must be 64-bit for live scanning.
+
+**Windows (cross-build from Linux)**
+
+```bash
+make windows  # -> dist/windows/warframe.exe
+```
+
+This requires Wine and downloads a 64-bit Windows Python on first use.
+
+The `.exe` still downloads game data on first use, so run `--update`
+once. Its data directory is `%LOCALAPPDATA%\warframe-profile`. The binary
+is unsigned, so Windows SmartScreen may show a warning on first launch.
 
 ## Usage
 

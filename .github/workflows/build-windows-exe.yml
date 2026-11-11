@@ -1,0 +1,42 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up 64-bit Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+
+      - name: Build one-file executable
+        run: python -m PyInstaller --clean --noconfirm warframe.spec
+
+      - name: Smoke test
+        run: dist\warframe.exe --help
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: warframe-windows-x64
+          path: dist/warframe.exe
+          if-no-files-found: error

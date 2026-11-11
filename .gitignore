@@ -3,4 +3,7 @@ __pycache__/
 data/*.json
 .ruff_cache/
 *.egg-info/
+/build/
+/dist/
+/.wine-build/
 
