@@ -43,8 +43,8 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target> [ARGS=...]\n\nTargets:\n"} \
 		/^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nExamples:\n"
-	@printf "  make run ARGS='--ducats --refresh'\n"
-	@printf "  make run ARGS='--craft \"Acceltra Prime\" --depth 3'\n"
+	@printf "  make run ARGS='ducats --refresh'\n"
+	@printf "  make run ARGS='craft \"Acceltra Prime\" --depth 3'\n"
 	@printf "  make install-linux\n"
 	@printf "  make build-windows\n\n"
 
@@ -54,7 +54,7 @@ install: ## Install the project into the Poetry virtualenv (dev tools included)
 update: ## Download and merge the latest game data into the per-user data dir
 	$(POETRY) run warframe update
 
-run: ## Run the CLI, e.g. make run ARGS='--ducats'
+run: ## Run the CLI, e.g. make run ARGS='ducats'
 	$(POETRY) run warframe $(ARGS)
 
 lint: ## Check code style with ruff

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inventory Cleanup sub-command (``--cleanup``).
+"""Inventory Cleanup sub-command (``cleanup``).
 
 Identifies items and parts you can safely sell:
 

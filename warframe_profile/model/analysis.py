@@ -1209,8 +1209,8 @@ def compute_sellable_equipment(
 ) -> list[SellableEquipment]:
     """Compute the market-re-buyable equipment list from an :class:`ExportDB`.
 
-    Convenience wrapper shared by the ``--ducats`` / ``--relics`` /
-    ``--cleanup`` entry points.
+    Convenience wrapper shared by the ``ducats`` / ``relics`` /
+    ``cleanup`` entry points.
     """
     ingredient_index = build_ingredient_index_craftable_to_owned(
         db.recipes,
@@ -1524,7 +1524,7 @@ def analyze(
 ) -> AnalysisResult:
     """Cross-reference inventory against prime_map.
 
-    This is the **main analysis pipeline** for the ``--ducats`` sub-command.
+    This is the **main analysis pipeline** for the ``ducats`` sub-command.
     It classifies every Prime item into one of four statuses:
 
     * ``have_copy`` — player owns a finished copy.

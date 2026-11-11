@@ -1,4 +1,4 @@
-"""Command-line interface for the ducats / prime-part analysis (``--ducats``).
+"""Command-line interface for the ducats / prime-part analysis (``ducats``).
 
 Workflow
 --------
@@ -51,7 +51,7 @@ def _run(
     inv: dict,
     show_relics: bool,
 ) -> None:
-    """Shared logic for both ``--ducats`` and ``--relics``.
+    """Shared logic for both ``ducats`` and ``relics``.
 
     Flow:
         1. Build Prime map from the item database.
@@ -59,7 +59,7 @@ def _run(
         3. Build the set of mastered items (XP history).
         4. Run core analysis (``analyze``).
         5. Compute market-rebuyable equipment.
-        6. If ``--relics`` mode: compute needed drops + safe relics and print.
+        6. If ``relics`` mode: compute needed drops + safe relics and print.
            Otherwise: print the full ducat analysis report.
     """
     items = db.items
@@ -106,7 +106,7 @@ def _run(
         print_report(data)
         return
 
-    # --relics mode: show relic tables only.
+    # relics mode: show relic tables only.
     needed = build_needed_drops(
         items,
         inv,
@@ -132,7 +132,7 @@ def _run(
 
 
 def main(args) -> None:
-    """Entry point for the ``--ducats`` sub-command."""
+    """Entry point for the ``ducats`` sub-command."""
     db, inv = load_data(
         args.items_cache,
         args.refresh_items,
@@ -143,7 +143,7 @@ def main(args) -> None:
 
 
 def relics_main(args) -> None:
-    """Entry point for the ``--relics`` sub-command."""
+    """Entry point for the ``relics`` sub-command."""
     db, inv = load_data(
         args.items_cache,
         args.refresh_items,

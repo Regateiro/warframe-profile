@@ -200,7 +200,7 @@ def get_recipe_components(
 # ---------------------------------------------------------------------------
 # Search / lookup
 # ---------------------------------------------------------------------------
-# The ``--craft`` sub-command supports name-based item search.  These
+# The ``craft`` sub-command supports name-based item search.  These
 # functions build a name index and find items by substring matching with
 # relevance scoring (exact → starts-with → word match → loose).
 #

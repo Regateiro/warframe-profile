@@ -9,11 +9,11 @@ materials you still need to farm.
 
 | Command | Description |
 |---|---|
-| `--ducats` | Prime-part / ducats analysis — shows owned, buildable, and partial items with surplus ducat values |
-| `--craft`  | Interactive crafting-tree browser — resolves full dependency trees for any item |
-| `--cleanup` | Inventory cleanup — lists weapons safe to sell (re-buyable or replaced by a Prime variant) |
-| `--foundry` | Export your inventory in the import format accepted by [Warframe Foundry](https://warframe-foundry.app/) |
-| `--update` | Download and merge the latest DE export + WFCD item database |
+| `ducats` | Prime-part / ducats analysis — shows owned, buildable, and partial items with surplus ducat values |
+| `craft`  | Interactive crafting-tree browser — resolves full dependency trees for any item |
+| `cleanup` | Inventory cleanup — lists weapons safe to sell (re-buyable or replaced by a Prime variant) |
+| `foundry` | Export your inventory in the import format accepted by [Warframe Foundry](https://warframe-foundry.app/) |
+| `update` | Download and merge the latest DE export + WFCD item database |
 
 Additional highlights:
 
@@ -137,7 +137,7 @@ make build-windows  # -> dist/windows/warframe-profile.exe
 
 This requires Wine and downloads a 64-bit Windows Python on first use.
 
-The `.exe` still downloads game data on first use, so run `--update`
+The `.exe` still downloads game data on first use, so run `update`
 once. Its data directory is `%LOCALAPPDATA%\warframe-profile`. The binary
 is unsigned, so Windows SmartScreen may show a warning on first launch.
 
@@ -169,7 +169,7 @@ The **Refresh Inventory** button re-scans the game.
 This must be run first to download and merge the game data:
 
 ```bash
-python warframe.py --update
+python warframe.py update
 ```
 
 Downloads ~40 JSON files from Digital Extremes' public export and the
@@ -180,16 +180,16 @@ WFCD community item database, merging them into
 
 ```bash
 # With live inventory scan (Warframe must be running):
-python warframe.py --ducats --refresh
+python warframe.py ducats --refresh
 
 # With a cached inventory file:
-python warframe.py --ducats --inventory path/to/inventory.json
+python warframe.py ducats --inventory path/to/inventory.json
 
 # Refresh the items database first:
-python warframe.py --ducats --refresh-items
+python warframe.py ducats --refresh-items
 
 # Show only the sell-for-ducats list:
-python warframe.py --ducats --sell-only
+python warframe.py ducats --sell-only
 ```
 
 The analysis shows:
@@ -203,17 +203,17 @@ The analysis shows:
 
 ```bash
 # Look up a specific item:
-python warframe.py --craft "Paracesis"
-python warframe.py --craft "Acceltra Prime" --depth 3
+python warframe.py craft "Paracesis"
+python warframe.py craft "Acceltra Prime" --depth 3
 
 # Interactive mode (search and pick from multiple matches):
-python warframe.py --craft --interactive
+python warframe.py craft --interactive
 
 # Analyze all weapon upgrade chains:
-python warframe.py --craft --weapon-chain
+python warframe.py craft --weapon-chain
 
 # Refresh inventory:
-python warframe.py --craft --refresh
+python warframe.py craft --refresh
 ```
 
 The tree uses colour-coded output:
@@ -229,7 +229,7 @@ Set `FORCE_COLOR=1` to keep it in a pipe or `NO_COLOR=1` to turn it off.
 ### Inventory cleanup
 
 ```bash
-python warframe.py --cleanup [--refresh] [--refresh-items]
+python warframe.py cleanup [--refresh] [--refresh-items]
 ```
 
 Shows two sections:
@@ -290,7 +290,7 @@ same file.
 - **DE Public Export**: [`https://browse.wf/warframe-public-export-plus/`](https://browse.wf/warframe-public-export-plus/)
 - **WFCD Items**: [`https://github.com/WFCD/warframe-items`](https://github.com/WFCD/warframe-items)
 
-The `--update` command downloads both sources and merges them into
+The `update` command downloads both sources and merges them into
 `export_db.json` in the per-user data directory.  The merge enriches DE items with fields from
 WFCD (e.g., `isPrime`, `marketCost`, `components` with ducat values)
 and adds WFCD-only Prime items not present in the DE export.
@@ -302,7 +302,7 @@ warframe-profile/
   warframe.py                                # Unified entrypoint
   warframe_profile/
     __init__.py                              # Package init, DATA_DIR
-    __main__.py                              # Sub-command dispatcher (--craft/--ducats/...)
+    __main__.py                              # Sub-command dispatcher (craft/ducats/...)
     compat.py                                # UTF-8 stdio, ANSI/colour platform helpers
     model/                                   # Data layer: inventory, export DB, analysis
       errors.py                              # Shared exception types
@@ -315,18 +315,18 @@ warframe-profile/
       foundry_export.py                      # Warframe Foundry import-file builder
       ...
     presenter/                               # CLI + web sub-command entry points
-      cli.py                                 # --ducats / --relics
-      craft_tree.py                          # --craft
-      inventory_cleanup.py                   # --cleanup
-      mastery.py                             # --mastery
-      missing_mods.py                        # --mods
-      foundry_export.py                      # --foundry
-      web_server.py                          # --serve
+      cli.py                                 # ducats / relics
+      craft_tree.py                          # craft
+      inventory_cleanup.py                   # cleanup
+      mastery.py                             # mastery
+      missing_mods.py                        # mods
+      foundry_export.py                      # foundry
+      web_server.py                          # serve
     view/                                    # Output rendering (tables / HTML)
       report.py                              # prettytable report formatting
       web/templates.py                       # Web UI HTML templates
     scripts/
-      update_export_db.py                    # --update: download & merge export data
+      update_export_db.py                    # update: download & merge export data
 
 ~/.local/share/warframe-profile/            # Linux/macOS data dir
 %LOCALAPPDATA%\warframe-profile\            # Windows data dir

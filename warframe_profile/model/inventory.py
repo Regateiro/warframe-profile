@@ -86,7 +86,7 @@ EQUIPMENT_SECTIONS: list[str] = [
 
 # ---------------------------------------------------------------------------
 # Generic HTTP helper — used by inventory fetching, profile fetching, and
-# the ``--update`` script to download data from DE and WFCD servers.
+# the ``update`` script to download data from DE and WFCD servers.
 # ---------------------------------------------------------------------------
 
 
@@ -134,7 +134,7 @@ class ExportDB:
         """Load (or reload) the database from disk.
 
         If *refresh* is ``True`` the cached file is removed first so the
-        next ``--update`` run produces fresh data.
+        next ``update`` run produces fresh data.
         """
         if refresh and self._path and os.path.exists(self._path):
             try:
@@ -144,14 +144,14 @@ class ExportDB:
                 print(f"warning: could not remove stale cache {self._path}: {exc}", file=sys.stderr)
         if not self._path or not os.path.exists(self._path):
             raise ItemCacheNotFoundError(
-                f"Item cache not found at {self._path}. Run --update first."
+                f"Item cache not found at {self._path}. Run update first."
             )
         try:
             with open(self._path, encoding="utf-8") as f:
                 self._data = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             raise ItemCacheNotFoundError(
-                f"Could not read item cache at {self._path}: {exc}. Run --update first."
+                f"Could not read item cache at {self._path}: {exc}. Run update first."
             ) from exc
 
     @property
@@ -291,7 +291,7 @@ def fetch_de_profile(account_id: str) -> dict:
 
     The profile API returns mastery rank, XP history (which items have been
     ranked up), and the player's display name.  This data is needed by the
-    ``--mastery`` sub-command and to determine which items are "mastered"
+    ``mastery`` sub-command and to determine which items are "mastered"
     even after being sold.
 
     Returns:
@@ -488,7 +488,7 @@ def merge_profile_data(inv: dict, profile: dict) -> None:
     * ``XPInfo`` — the canonical list of every item the player has ever
       ranked up, including items no longer owned.
 
-    This data is needed by the ``--mastery`` sub-command to determine
+    This data is needed by the ``mastery`` sub-command to determine
     which items have been mastered vs never touched.
     """
     inv["PlayerLevel"] = profile.get("PlayerLevel", inv.get("PlayerLevel", 0))
@@ -540,8 +540,8 @@ def load_data(
 ) -> tuple[ExportDB, dict]:
     """Load the export database and inventory in one call.
 
-    Convenience wrapper shared by the ``--ducats`` / ``--relics`` /
-    ``--cleanup`` entry points.  Exits the process on error.
+    Convenience wrapper shared by the ``ducats`` / ``relics`` /
+    ``cleanup`` entry points.  Exits the process on error.
 
     This is the standard "init" pattern for most sub-commands:
     1. Create ExportDB and load items.

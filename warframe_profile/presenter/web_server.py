@@ -1,6 +1,6 @@
 """Web server presenter — loads data and serves the web UI.
 
-The ``--serve`` sub-command starts a lightweight HTTP server (stdlib
+The ``serve`` sub-command starts a lightweight HTTP server (stdlib
 http.server + ThreadingMixIn) that serves the same analysis views as the
 CLI, rendered as HTML via :mod:`warframe_profile.view.web.templates`.
 
@@ -170,7 +170,7 @@ def load_db(items_cache: str) -> None:
 def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
     """(Re)load the player inventory and derived ownership data.
 
-    The item database is *not* touched — it only changes on ``--update``.
+    The item database is *not* touched — it only changes on ``update``.
     """
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
     _cache.inventory = inv
@@ -609,7 +609,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main(args) -> None:
-    """Entry point for the ``--serve`` sub-command."""
+    """Entry point for the ``serve`` sub-command."""
     items_cache = getattr(args, "items_cache", "") or os.path.join(DATA_DIR, "export_db.json")
     inv_path = getattr(args, "inventory", "") or os.path.join(DATA_DIR, "inventory.json")
     refresh = getattr(args, "refresh", False)

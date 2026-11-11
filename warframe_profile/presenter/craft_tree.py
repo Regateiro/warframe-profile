@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crafting tree browser (``--craft``) — presenter.
+"""Crafting tree browser (``craft``) — presenter.
 
 Orchestrates data loading, delegates domain logic to
 :mod:`warframe_profile.craft_model`, and displays output via
@@ -43,7 +43,7 @@ def _load_export_db(items_cache: str) -> tuple:
         xdb.load()
     except FileNotFoundError:
         print(
-            "Export database not found. Run `python warframe.py --update` first.",
+            "Export database not found. Run `python warframe.py update` first.",
             file=sys.stderr,
         )
         sys.exit(1)

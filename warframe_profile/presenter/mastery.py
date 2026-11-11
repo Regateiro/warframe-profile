@@ -1,4 +1,4 @@
-"""Mastery Rank progression analysis (``--mastery``).
+"""Mastery Rank progression analysis (``mastery``).
 
 Cross-references the player's XP history (from DE profile data) against
 the masterable items in the game database to identify true gaps — items
@@ -839,7 +839,7 @@ def print_report(report: MasteryReport) -> None:
 
 
 def main(args) -> None:
-    """Entry point for the ``--mastery`` sub-command."""
+    """Entry point for the ``mastery`` sub-command."""
     db, inv = load_data(
         args.items_cache,
         args.refresh_items,

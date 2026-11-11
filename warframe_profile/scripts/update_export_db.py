@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download and merge Warframe export data (``--update``).
+"""Download and merge Warframe export data (``update``).
 
 Downloads two data sources and merges them into a single file:
 
