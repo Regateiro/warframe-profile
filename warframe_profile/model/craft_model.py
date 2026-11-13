@@ -872,7 +872,11 @@ def build_weapon_chains(
     mastered: set[str] | None = None,
     max_depth: int = 5,
 ) -> tuple[list[list[str]], dict, dict, int]:
-    """Build weapon upgrade chains whose final weapon is not yet owned."""
+    """Build weapon upgrade chains whose final weapon is neither owned nor mastered.
+
+    The returned chain list is already filtered, so both the CLI and the web
+    view can render it directly; the final integer mirrors its length.
+    """
     from warframe_profile.model.analysis import WEAPON_CATEGORIES
 
     weapon_uns = {
@@ -884,7 +888,7 @@ def build_weapon_chains(
 
     all_requirements: dict[str, dict] = {}
     all_craftables: dict[str, dict] = {}
-    shown = 0
+    shown_chains: list[list[str]] = []
 
     for chain in chains:
         final_un = chain[-1]
@@ -903,8 +907,8 @@ def build_weapon_chains(
             all_craftables,
             max_depth,
         )  # noqa: E501
-        shown += 1
+        shown_chains.append(chain)
 
     compute_crafting_plan(all_craftables, owned)
 
-    return chains, all_requirements, all_craftables, shown
+    return shown_chains, all_requirements, all_craftables, len(shown_chains)

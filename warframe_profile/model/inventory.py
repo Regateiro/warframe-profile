@@ -123,19 +123,12 @@ class ExportDB:
 
     Sub-sections (``items``, ``recipes``, ``locale``, ``raw``) are accessed
     via properties so that callers never touch the raw JSON directly.
-
-    The ``_foundry_*`` memo slots are populated lazily by
-    :mod:`warframe_profile.model.foundry_export`; they live here so a single
-    instance is shared between the CLI and the web server.
     """
 
     def __init__(self, path: str) -> None:
         """Store the file path; data is loaded lazily on first call."""
         self._path = path
         self._data: dict | None = None
-        # Memoisation slots for foundry keying (populated on first use).
-        self._foundry_categories_by_key: dict[str, set[str]] | None = None
-        self._foundry_items_by_un: dict[str, dict] | None = None
 
     def load(self, refresh: bool = False) -> None:
         """Load (or reload) the database from disk.

@@ -12,7 +12,6 @@ materials you still need to farm.
 | `ducats` | Prime-part / ducats analysis — shows owned, buildable, and partial items with surplus ducat values |
 | `craft`  | Interactive crafting-tree browser — resolves full dependency trees for any item |
 | `cleanup` | Inventory cleanup — lists weapons safe to sell (re-buyable or replaced by a Prime variant) |
-| `foundry` | Export your inventory in the import format accepted by [Warframe Foundry](https://warframe-foundry.app/) |
 | `update` | Download and merge the latest DE export + WFCD item database |
 
 Additional highlights:
@@ -108,7 +107,6 @@ directory is created automatically when data is first written.
 | `export_db.json` | Merged DE + WFCD item database |
 | `inventory.json` | Cached inventory |
 | `mod_drop_locations.json` | Cached WFCD mod drop table |
-| `warframe-foundry.json` | Generated Foundry import file |
 | `export_db.json.corrupt` | A cache moved aside when it could not be decoded |
 
 ### Single-file executables
@@ -174,14 +172,16 @@ reachable from the same machine. Pass `--host 0.0.0.0` (or set
 `WARFRAME_WEB_HOST`) to expose it on the network; the UI has no
 authentication, so only do that on a trusted network. Opening a matching
 `http://localhost:<port>/` URL is printed at startup.
- Every CLI analysis has a matching web tab: ducats, relics, crafting,
-weapon chains, mastery progression, missing mods, cleanup, and the Foundry
-export. They use the same model functions and derived state as the CLI —
-including mastered-but-sold items — so both show the same recommendations.
+Every CLI analysis has a matching web tab: ducats, relics, crafting,
+weapon chains, mastery progression, missing mods, and cleanup. They use the
+same model functions and derived state as the CLI — including
+mastered-but-sold items — so both show the same recommendations.
 The **Refresh Inventory** button re-scans the game and reloads the page you
 are currently viewing; any expanded crafting results stay open. If the game
 isn't running, a dismissible notification explains why and the cached data
-is kept.
+is kept. The **Refresh Item DB** button next to it re-downloads and merges
+the item database (the same work as `python warframe.py update`) without
+touching your inventory.
 
 ### Update the item database
 
@@ -259,52 +259,6 @@ Shows two sections:
 2. **Items to Sell (Own Prime Variant)** — non-Prime weapons whose Prime
    variant you already own.
 
-### Export for Warframe Foundry
-
-```bash
-# Write warframe-foundry.json to the data directory from the cached inventory:
-python warframe.py foundry
-
-# Live inventory scan (Warframe must be running):
-python warframe.py --refresh foundry
-
-# Write to a custom path:
-python warframe.py foundry --output /path/to/warframe-foundry.json
-
-# Add Steel Path progress (not tracked in the inventory export):
-# By XP total (Steel Path nodes/junctions award the same ~63/1000 mastery
-# as the normal chart, so the single number the game exposes is enough):
-python warframe.py foundry --steel-xp 21455
-# Or by explicit counts:
-python warframe.py foundry --steel-missions 232 --steel-junctions 13
-```
-
-Produces a `warframe-foundry.json` file in the exact import format accepted
-by [Warframe Foundry](https://warframe-foundry.app/).  It encodes:
-
-- **Items** — every owned piece of equipment marked `built`, every item
-  whose total XP reaches its single-pass max (rank 30: 900,000 for
-  warframes/archwings/companions, 450,000 for weapons; rank 40: 1,600,000
-  for necramechs, 800,000 for Kuva/Tenet/Coda/Paracesis) marked `mastered`,
-  and owned blueprints / parts as per-item component counts.  Partially
-  ranked items (e.g. a necramech with 460k XP) are *not* marked mastered.
-- **Resources** — owned material counts (Orokin Cell, Plastids, etc.).
-- **Settings** — mission / junction / intrinsics counts, auto-derived from
-  the inventory (`Missions` node tags and `PlayerSkills` intrinsics), so the
-  Foundry's Mastery Rank matches your real progress.  Steel Path counts
-  aren't exposed in the inventory export; pass `--steel-xp` with your total
-  Steel Path mastery gained and it is split into steel mission / junction
-  counts automatically (or set them directly with `--steel-missions` /
-  `--steel-junctions`; `--missions`, `--junctions`, `--intrinsics` override
-  any of the auto-derived values).
-
-After exporting, the command prints an estimate of the Mastery Rank the
-Foundry will display.  Open warframe-foundry.app, press **Import Data**, and
-select the file.  The web UI (run `python warframe.py` with no arguments,
-or `python warframe.py serve`) also offers a
-**Export for Warframe Foundry** button on the home page that downloads the
-same file.
-
 ## Data sources
 
 - **DE Public Export**: [`https://browse.wf/warframe-public-export-plus/`](https://browse.wf/warframe-public-export-plus/)
@@ -334,7 +288,6 @@ warframe-profile/
       inventory.py                           # API fetching, cache, shared helpers
       analysis.py                            # Prime-map indexing & cross-reference analysis
       craft_model.py                         # Item/recipe indices for the craft tree
-      foundry_export.py                      # Warframe Foundry import-file builder
       ...
     presenter/                               # CLI + web sub-command entry points
       cli.py                                 # ducats / relics
@@ -342,7 +295,6 @@ warframe-profile/
       inventory_cleanup.py                   # cleanup
       mastery.py                             # mastery
       missing_mods.py                        # mods
-      foundry_export.py                      # foundry
       web_server.py                          # serve
     view/                                    # Output rendering (tables / HTML)
       report.py                              # prettytable report formatting
@@ -354,5 +306,4 @@ warframe-profile/
 %LOCALAPPDATA%\warframe-profile\            # Windows data dir
   export_db.json                           # Merged item database (generated)
   inventory.json                           # Cached inventory (generated)
-  warframe-foundry.json                    # Foundry import file (generated by `foundry`)
 ```

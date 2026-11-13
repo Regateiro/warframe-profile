@@ -29,6 +29,7 @@ from warframe_profile.model.craft_model import (
     resolve_tree,
     should_expand,
     un_to_name,
+    weapon_name,
 )
 from warframe_profile.model.utils import normalize_path
 from warframe_profile.view.report import is_prime_part, part_label
@@ -107,23 +108,27 @@ _PAGE_STYLES = f"""<style>
 </style>"""
 
 #: Shows a dismissible notification when the page was reached after a failed
-#: inventory refresh (``?refresh_error=…``).  The parameter is stripped from
-#: the address bar once the message has been picked up, so a later manual
-#: reload does not repeat it.
+#: inventory refresh (``?refresh_error=…``) or a completed item-database
+#: refresh (``?notice=…``).  The parameter is stripped from the address bar
+#: once the message has been picked up, so a later manual reload does not
+#: repeat it.
 _NOTICE_JS = """<script>
 (() => {
   const params = new URLSearchParams(location.search);
-  const message = params.get("refresh_error");
+  const error = params.get("refresh_error");
+  const info = params.get("notice");
+  const message = error || info;
   if (!message) return;
   params.delete("refresh_error");
+  params.delete("notice");
   const query = params.toString();
   history.replaceState(
     null, "", location.pathname + (query ? "?" + query : "") + location.hash
   );
 
   const notice = document.createElement("div");
-  notice.className = "flash flash-error notice";
-  notice.setAttribute("role", "alert");
+  notice.className = error ? "flash flash-error notice" : "flash notice";
+  notice.setAttribute("role", error ? "alert" : "status");
   notice.textContent = message;
 
   const close = document.createElement("button");
@@ -150,7 +155,7 @@ _DETAILS_STATE_JS = """<script>
 (() => {
   const key = "wf-open-details:" + location.pathname + location.search;
 
-  document.querySelectorAll('form[action="/refresh"]').forEach((form) => {
+  document.querySelectorAll('form[action^="/refresh"]').forEach((form) => {
     form.addEventListener("submit", () => {
       const open = Array.from(document.querySelectorAll("details")).map((d) => d.open);
       try {
@@ -187,12 +192,20 @@ def _nav_link(key: str, label: str, url: str, active: str) -> str:
     return f'<a href="{url}"{active_cls}>{label}</a>'
 
 
-def _refresh_form() -> str:
-    """Return the POST form that triggers an inventory refresh."""
+def _refresh_actions() -> str:
+    """Return the POST forms that refresh the inventory and the item database."""
     return (
-        '<form method="post" action="/refresh" style="margin-left:auto">'
-        '<button type="submit" style="padding:4px 12px;font-size:0.85rem">'
+        '<div style="margin-left:auto;display:flex;gap:6px">'
+        '<form method="post" action="/refresh">'
+        '<button type="submit" title="Re-scan the running game for your inventory" '
+        'style="padding:4px 12px;font-size:0.85rem">'
         "Refresh Inventory</button></form>"
+        '<form method="post" action="/refresh-items">'
+        '<button type="submit" title="Re-download the merged item database '
+        '(same as `warframe update`)" '
+        'style="padding:4px 12px;font-size:0.85rem">'
+        "Refresh Item DB</button></form>"
+        "</div>"
     )
 
 
@@ -219,7 +232,7 @@ def _page(title: str, content: str, active: str) -> str:
 </head>
 <body>
 <h1>Warframe Profile</h1>
-<nav>{tab_links}{_refresh_form()}</nav>
+<nav>{tab_links}{_refresh_actions()}</nav>
 {content}
 {_NOTICE_JS}
 {_DETAILS_STATE_JS}
@@ -271,11 +284,7 @@ def render_home() -> str:
     return _page(
         "Home",
         """
-<div class="flash">Select a tab above to explore your Warframe profile.
-  <a href="/foundry-export" style="float:right;display:inline-block;padding:4px 12px;
-     border-radius:6px;background:#1f6feb;color:#fff;text-decoration:none">
-     Export for Warframe Foundry</a>
-</div>
+<div class="flash">Select a tab above to explore your Warframe profile.</div>
 <ul style="margin-left:20px;line-height:1.8">
   <li><strong>Ducats</strong> — Prime part analysis, missing items, sell recommendations</li>
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
@@ -285,9 +294,8 @@ def render_home() -> str:
   <li><strong>Mods</strong> — Missing mods grouped by in-game category</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
 </ul>
-<p class="dim" style="font-size:0.8rem">The <strong>Export for Warframe Foundry</strong> button
-downloads a <code>warframe-foundry.json</code> file you can import at
-<a href="https://warframe-foundry.app/" style="color:#58a6ff">warframe-foundry.app</a>.</p>""",
+<p class="dim" style="font-size:0.8rem">Use <strong>Refresh Inventory</strong> to re-scan the
+game, or <strong>Refresh Item DB</strong> to re-download the item database.</p>""",
         "home",
     )
 
@@ -759,12 +767,9 @@ def render_weapon_chains(
         if owned.get(final_norm, 0) > 0:
             continue
 
-        names = []
-        item = items_by_un.get(final_un.lower())
-        if item:
-            names.append(resolve_name(item.get("name", ""), loc_dict) or un_to_name(final_un))
-        else:
-            names.append(un_to_name(final_un))
+        # Show the whole upgrade path (e.g. "Magnus Prime → Akmagnus Prime"),
+        # matching the CLI; only the final weapon is actually built.
+        names = [weapon_name(un, items_by_un, loc_dict) for un in chain]
 
         tree = _tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)
         req, craft = resolve_tree(

@@ -14,7 +14,6 @@ Every sub-command is accessed through this script:
     python warframe.py mastery
     python warframe.py mods
     python warframe.py relics
-    python warframe.py foundry
 """
 
 import sys

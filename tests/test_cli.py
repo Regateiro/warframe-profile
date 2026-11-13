@@ -16,7 +16,7 @@ from warframe_profile.__main__ import _COMMAND_TABLE, _build_parser
         (["ducats", "--refresh-items"], "ducats"),
         (["serve", "--port", "8091"], "serve"),
         (["serve", "--host", "0.0.0.0"], "serve"),
-        (["--refresh", "foundry"], "foundry"),
+        (["--refresh", "ducats"], "ducats"),
         (["--host", "0.0.0.0", "serve"], "serve"),
         (["--refresh", "ducats", "--refresh-items"], "ducats"),
     ],

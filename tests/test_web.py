@@ -13,12 +13,14 @@ from warframe_profile.presenter.web_server import (
     _is_loopback,
     _is_same_origin_request,
     _parse_host,
+    _with_notice,
 )
 from warframe_profile.view.web.templates import (
     _esc,
     _item_row,
     render_cleanup_rebuy,
     render_ducats_missing,
+    render_home,
     render_relics_safe,
 )
 
@@ -61,6 +63,81 @@ def test_same_origin_rejects_cross_origin_requests():
     assert not _is_same_origin_request("http://evil.example", "", "127.0.0.1:8090")
     assert not _is_same_origin_request("", "http://evil.example/x", "127.0.0.1:8090")
     assert not _is_same_origin_request("null", "", "127.0.0.1:8090")
+
+
+def test_with_notice_marks_errors():
+    url = _with_notice("/ducats", "boom")
+
+    assert "refresh_error=boom" in url
+    assert "notice=" not in url
+
+
+def test_with_notice_marks_informational_messages():
+    url = _with_notice("/ducats", "done", error=False)
+
+    assert "notice=done" in url
+    assert "refresh_error" not in url
+
+
+def test_home_page_has_both_refresh_buttons():
+    page = render_home()
+
+    assert 'action="/refresh"' in page
+    assert 'action="/refresh-items"' in page
+    assert "Refresh Inventory" in page
+    assert "Refresh Item DB" in page
+
+
+def _bare_handler(web_server):
+    """Build a WarframeHandler without opening a socket."""
+    handler = object.__new__(web_server.WarframeHandler)
+    handler._return_path = lambda: "/ducats"
+    return handler
+
+
+def test_refresh_items_runs_update_then_reloads(monkeypatch):
+    from warframe_profile.presenter import web_server
+    from warframe_profile.scripts import update_export_db
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._redirect = lambda path: calls.append(("redirect", path))
+
+    monkeypatch.setattr(web_server._cache, "items_cache", "/tmp/export_db.json")
+    monkeypatch.setattr(web_server, "load_db", lambda path: calls.append(("load_db", path)))
+    monkeypatch.setattr(web_server, "rebuild_derived_state", lambda: calls.append("rebuild"))
+    monkeypatch.setattr(
+        update_export_db, "main", lambda args: calls.append(("update", args.items_cache))
+    )
+
+    web_server.WarframeHandler._handle_refresh_items(handler)
+
+    assert ("update", "/tmp/export_db.json") in calls
+    assert ("load_db", "/tmp/export_db.json") in calls
+    assert "rebuild" in calls
+    assert calls[-1][0] == "redirect"
+    assert "notice=" in calls[-1][1]
+
+
+def test_refresh_items_reports_failure(monkeypatch):
+    from warframe_profile.presenter import web_server
+    from warframe_profile.scripts import update_export_db
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._redirect = lambda path: calls.append(("redirect", path))
+
+    monkeypatch.setattr(web_server._cache, "items_cache", "/tmp/export_db.json")
+
+    def fail(_args):
+        raise OSError("network down")
+
+    monkeypatch.setattr(update_export_db, "main", fail)
+
+    web_server.WarframeHandler._handle_refresh_items(handler)
+
+    assert calls[-1][0] == "redirect"
+    assert "refresh_error=" in calls[-1][1]
 
 
 def test_esc_escapes_markup():

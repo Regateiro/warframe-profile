@@ -27,7 +27,6 @@ _COMMAND_TABLE = {
     "serve": ("warframe_profile.presenter.web_server", "main"),
     "mastery": ("warframe_profile.presenter.mastery", "main"),
     "mods": ("warframe_profile.presenter.missing_mods", "main"),
-    "foundry": ("warframe_profile.presenter.foundry_export", "main"),
 }
 
 
@@ -127,33 +126,6 @@ def _build_parser() -> argparse.ArgumentParser:
     add_command("serve", "Start web UI server (default when no command is given)")
     add_command("mastery", "Mastery rank progression & farming guide")
     add_command("mods", "List mods you don't own yet")
-
-    foundry_sub = add_command("foundry", "Export inventory for Warframe Foundry")
-    foundry_sub.add_argument(
-        "--output",
-        "-o",
-        default=None,
-        help="Output path for the Foundry import file (default: data/warframe-foundry.json)",
-    )
-    foundry_sub.add_argument(
-        "--steel-xp",
-        type=int,
-        default=None,
-        help="Total Steel Path mastery XP gained (converted to steel mission/junction counts)",
-    )
-    for _arg, _field in (
-        ("--missions", "missionCount"),
-        ("--junctions", "junctionCount"),
-        ("--steel-missions", "steelMissionCount"),
-        ("--steel-junctions", "steelJunctionCount"),
-        ("--intrinsics", "intrinsicsCount"),
-    ):
-        foundry_sub.add_argument(
-            _arg,
-            type=int,
-            default=None,
-            help=f"Override the Foundry '{_field}' count (auto-derived otherwise)",
-        )
 
     return parser
 

@@ -18,7 +18,6 @@ are computed lazily when first requested.
 import functools
 import html
 import http.server
-import json
 import os
 import signal
 import socketserver
@@ -55,10 +54,6 @@ from warframe_profile.model.craft_model import (
     find_items,
 )
 from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
-from warframe_profile.model.foundry_export import (
-    build_foundry_export,
-    steel_settings_from_xp,
-)
 from warframe_profile.model.inventory import (
     EQUIPMENT_SECTIONS,
     ExportDB,
@@ -146,6 +141,8 @@ class DataCache:
     def __init__(self) -> None:
         """Initialise the cache to its empty state."""
         self.db: ExportDB | None = None
+        self.items_cache: str = ""
+        self.inventory_path: str = ""
         self.inventory: dict = {}
         self.owned: dict = {}
         self.mastered: set[str] = set()
@@ -168,8 +165,6 @@ class DataCache:
         self.owned_prime_pairs: list[tuple[str, str, str]] | None = None
         self.excess_items: list[ExcessItem] | None = None
         self.weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
-        self.foundry_export: dict | None = None
-        self.foundry_settings: tuple | None = None
         self.mastery_report: MasteryReport | None = None
         self.mods_report: ModsReport | None = None
 
@@ -180,13 +175,21 @@ _cache = DataCache()
 # potentially expose torn state) on concurrent first requests.  Re-entrant
 # because the ``_ensure_*`` helpers nest (e.g. analysis → prime map).
 _cache_lock = threading.RLock()
+# Serialises item-database refreshes.  Downloading + merging takes a while and
+# must not run twice concurrently; the lock is only held by the refresh
+# request, never by normal reads (those use ``_cache_lock`` for the swap).
+_items_refresh_lock = threading.Lock()
 
 
-def _with_notice(path: str, message: str) -> str:
-    """Return *path* with a ``refresh_error`` notification parameter added."""
+def _with_notice(path: str, message: str, *, error: bool = True) -> str:
+    """Return *path* with a notification parameter added.
+
+    Errors use ``refresh_error`` (rendered as an alert); informational
+    messages use ``notice``.
+    """
     parsed = urllib.parse.urlparse(path)
     params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    params.append(("refresh_error", message))
+    params.append(("refresh_error" if error else "notice", message))
     return urllib.parse.urlunparse(
         ("", "", parsed.path or "/", "", urllib.parse.urlencode(params), "")
     )
@@ -201,14 +204,36 @@ def _require_db() -> ExportDB:
 
 
 def load_db(items_cache: str) -> None:
-    """Load the item database and build its static indices."""
-    _cache.db = ExportDB(items_cache)
-    _cache.db.load()
-    data = _cache.db.raw
-    _cache.items_by_un = build_items_by_un(data)
-    _cache.recipes_by_result = build_recipes_by_result(data)
-    _cache.loc_dict = data.get("dict", {})
-    _cache.by_name = build_lookup(_cache.items_by_un, _cache.loc_dict)
+    """Load the item database and atomically swap its static indices.
+
+    The database and all derived indices are built off to the side and then
+    swapped under ``_cache_lock``, so concurrent requests never observe a new
+    database paired with stale indices.
+    """
+    db = ExportDB(items_cache)
+    db.load()
+    data = db.raw
+    items_by_un = build_items_by_un(data)
+    recipes_by_result = build_recipes_by_result(data)
+    loc_dict = data.get("dict", {})
+    by_name = build_lookup(items_by_un, loc_dict)
+
+    with _cache_lock:
+        _cache.db = db
+        _cache.items_cache = items_cache
+        _cache.items_by_un = items_by_un
+        _cache.recipes_by_result = recipes_by_result
+        _cache.loc_dict = loc_dict
+        _cache.by_name = by_name
+        _cache.reset()
+
+
+def rebuild_derived_state() -> None:
+    """Recompute inventory-derived indices after the item database changes."""
+    with _cache_lock:
+        _cache.mastered = build_mastered_set(_cache.inventory)
+        _cache.owned = build_owned(_cache.inventory, _require_db().recipes)
+        _cache.reset()
 
 
 def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
@@ -217,9 +242,11 @@ def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
     The item database is *not* touched — it only changes on ``update``.
     """
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
-    _cache.inventory = inv
-    _cache.mastered = build_mastered_set(inv)
-    _cache.owned = build_owned(inv, _require_db().raw.get("recipes", {}))
+    with _cache_lock:
+        _cache.inventory_path = inventory_path
+        _cache.inventory = inv
+        _cache.mastered = build_mastered_set(inv)
+        _cache.owned = build_owned(inv, _require_db().raw.get("recipes", {}))
 
 
 def invalidate_analysis() -> None:
@@ -389,21 +416,6 @@ def _ensure_weapon_chains():
     )
 
 
-def _ensure_foundry_export(settings: dict | None):
-    """Lazy-load (and cache per settings) the Foundry export payload."""
-    key = tuple(sorted(settings.items())) if settings else None
-    if _cache.foundry_export is not None and _cache.foundry_settings == key:
-        return _cache.foundry_export
-    with _cache_lock:
-        if _cache.foundry_export is not None and _cache.foundry_settings == key:
-            return _cache.foundry_export
-        _cache.foundry_export = build_foundry_export(
-            _require_db(), _cache.inventory, settings=settings
-        )
-        _cache.foundry_settings = key
-        return _cache.foundry_export
-
-
 @_lazy("mastery_report")
 def _ensure_mastery():
     """Lazy-load the mastery progression report."""
@@ -544,32 +556,53 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         assert _cache.mods_report is not None  # guaranteed by _ensure_mods
         self._html(200, render_mods(_cache.mods_report))
 
-    def _handle_foundry_export(self, params: dict):
-        """Serve the Warframe Foundry import file as a JSON download.
+    def _handle_refresh_items(self) -> None:
+        """Re-download the merged item database and rebuild its indices."""
+        return_path = self._return_path()
+        if not _items_refresh_lock.acquire(blocking=False):
+            self._redirect(
+                _with_notice(
+                    return_path,
+                    "An item database refresh is already running.",
+                    error=False,
+                )
+            )
+            return
 
-        Supports an optional ``?steel_xp=<points>`` query parameter for the
-        player's total Steel Path mastery gained (see
-        :func:`steel_settings_from_xp`).
-        """
-        settings = None
-        steel_xp = (params.get("steel_xp") or [""])[0].strip()
-        if steel_xp:
-            try:
-                settings = steel_settings_from_xp(int(steel_xp))
-            except ValueError:
-                self._html(400, "<h1>400 Bad Request</h1><p>steel_xp must be an integer</p>")
+        try:
+            items_cache = _cache.items_cache
+            if not items_cache:
+                self._redirect(_with_notice(return_path, "Item database path is unknown."))
                 return
-        export = _ensure_foundry_export(settings)
-        body = json.dumps(export, indent=2).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header(
-            "Content-Disposition",
-            'attachment; filename="warframe-foundry.json"',
-        )
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+
+            # Imported lazily to keep startup light and avoid a circular import.
+            from types import SimpleNamespace
+
+            from warframe_profile.scripts.update_export_db import main as update_main
+
+            print("[web] Refreshing item database…", file=sys.stderr)
+            update_main(
+                SimpleNamespace(
+                    items_cache=items_cache,
+                    refresh_items=False,
+                    refresh=False,
+                )
+            )
+            load_db(items_cache)
+            rebuild_derived_state()
+        except (SystemExit, Exception) as exc:
+            traceback.print_exc()
+            self._redirect(
+                _with_notice(
+                    return_path,
+                    f"Item database refresh failed: {exc}"[:300],
+                )
+            )
+            return
+        finally:
+            _items_refresh_lock.release()
+
+        self._redirect(_with_notice(return_path, "Item database refreshed.", error=False))
 
     def _handle_cleanup(self, subpath: str):
         """Serve cleanup sub-views (rebuy / sell / excess)."""
@@ -611,7 +644,6 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             /mastery        → Mastery progression (blueprint ready, gaps)
             /mods           → Missing mods by in-game category
             /cleanup[/...]  → Inventory cleanup (rebuy / sell / excess)
-            /foundry-export → Download Warframe Foundry import file (JSON)
         """
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -634,8 +666,6 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_mods()
             elif path.startswith("/cleanup"):
                 self._handle_cleanup(path.removeprefix("/cleanup"))
-            elif path == "/foundry-export":
-                self._handle_foundry_export(params)
             else:
                 self._html(404, "<h1>404 Not Found</h1>")
         except Exception as e:
@@ -646,7 +676,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             self._html(500, f"<h1>500 Error</h1><pre>{html.escape(message)}</pre>")
 
     def do_POST(self):
-        """Handle POST requests — currently only /refresh."""
+        """Handle POST requests — ``/refresh`` and ``/refresh-items``."""
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -654,18 +684,22 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             if not self._is_same_origin():
                 self._html(403, "<h1>403 Forbidden</h1>")
                 return
-            inv_path = os.path.join(DATA_DIR, "inventory.json")
+            inv_path = _cache.inventory_path or os.path.join(DATA_DIR, "inventory.json")
             return_path = self._return_path()
             try:
-                with _cache_lock:
-                    reload_inventory(inv_path, refresh=True)
-                    invalidate_analysis()
+                reload_inventory(inv_path, refresh=True)
+                invalidate_analysis()
             except (WarframeNotRunningError, InventoryFetchError) as exc:
                 # Surface the failure as an in-page notification instead of a
                 # bare error page; cached data stays untouched.
                 self._redirect(_with_notice(return_path, str(exc)))
                 return
             self._redirect(return_path)
+        elif path == "/refresh-items":
+            if not self._is_same_origin():
+                self._html(403, "<h1>403 Forbidden</h1>")
+                return
+            self._handle_refresh_items()
         else:
             self._html(404, "<h1>404 Not Found</h1>")
 
