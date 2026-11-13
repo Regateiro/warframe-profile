@@ -15,10 +15,10 @@ All data is loaded once at startup (in ``load_all``) and analysis results
 are computed lazily when first requested.
 """
 
-import html
 import http.server
 import json
 import os
+import signal
 import socketserver
 import sys
 import threading
@@ -146,6 +146,16 @@ _cache = DataCache()
 # potentially expose torn state) on concurrent first requests.  Re-entrant
 # because the ``_ensure_*`` helpers nest (e.g. analysis → prime map).
 _cache_lock = threading.RLock()
+
+
+def _with_notice(path: str, message: str) -> str:
+    """Return *path* with a ``refresh_error`` notification parameter added."""
+    parsed = urllib.parse.urlparse(path)
+    params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    params.append(("refresh_error", message))
+    return urllib.parse.urlunparse(
+        ("", "", parsed.path or "/", "", urllib.parse.urlencode(params), "")
+    )
 
 
 def _require_db() -> ExportDB:
@@ -399,6 +409,22 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", path)
         self.end_headers()
 
+    def _return_path(self) -> str:
+        """Return a safe same-site path to return to after a refresh."""
+        referer = self.headers.get("Referer", "")
+        if not referer:
+            return "/"
+        parsed_ref = urllib.parse.urlparse(referer)
+        host = self.headers.get("Host", "")
+        if parsed_ref.netloc and parsed_ref.netloc != host:
+            return "/"
+        path = parsed_ref.path or "/"
+        if not path.startswith("/") or path.startswith("//"):
+            return "/"
+        if parsed_ref.query:
+            path += "?" + parsed_ref.query
+        return path
+
     def _handle_home(self):
         """Serve the home page."""
         self._html(200, render_home())
@@ -583,22 +609,17 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/refresh":
             inv_path = os.path.join(DATA_DIR, "inventory.json")
+            return_path = self._return_path()
             try:
                 with _cache_lock:
                     reload_inventory(inv_path, refresh=True)
                     invalidate_analysis()
             except (WarframeNotRunningError, InventoryFetchError) as exc:
-                message = html.escape(str(exc))
-                self._html(
-                    503,
-                    f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
-<title>Refresh failed</title></head><body>
-<h1>Inventory refresh failed</h1><p>{message}</p>
-<p>Your cached data is unchanged.</p><p><a href="/">Back to home</a></p>
-</body></html>""",
-                )
+                # Surface the failure as an in-page notification instead of a
+                # bare error page; cached data stays untouched.
+                self._redirect(_with_notice(return_path, str(exc)))
                 return
-            self._redirect("/")
+            self._redirect(return_path)
         else:
             self._html(404, "<h1>404 Not Found</h1>")
 
@@ -634,8 +655,33 @@ def main(args) -> None:
 
     with server as httpd:
         print(f"[web] Serving at http://0.0.0.0:{port}", file=sys.stderr)
+
+        def _handle_interrupt(signum, frame):
+            """Turn the first Ctrl+C into a clean exit and ignore the rest.
+
+            PyInstaller's bootloader forwards the terminal's SIGINT to the
+            child process as well, so a second delivery can otherwise land in
+            the shutdown path and produce a traceback.
+            """
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            raise KeyboardInterrupt
+
+        previous_handler = None
+        try:
+            previous_handler = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, _handle_interrupt)
+        except ValueError:
+            # Not the main thread (e.g. embedded use); keep the default handler.
+            previous_handler = None
+
+        interrupted = False
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
+            interrupted = True
             print("\n[web] Shutting down.", file=sys.stderr)
-            httpd.shutdown()
+        finally:
+            # After an interrupt SIGINT stays ignored until the process exits,
+            # so a late forwarded Ctrl+C cannot break teardown.
+            if not interrupted and previous_handler is not None:
+                signal.signal(signal.SIGINT, previous_handler)

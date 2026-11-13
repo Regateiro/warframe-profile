@@ -134,7 +134,9 @@ class ExportDB:
         """Load (or reload) the database from disk.
 
         If *refresh* is ``True`` the cached file is removed first so the
-        next ``update`` run produces fresh data.
+        next ``update`` run produces fresh data.  When the file is missing
+        (including after a refresh), the ``update`` command runs
+        automatically to download it.
         """
         if refresh and self._path and os.path.exists(self._path):
             try:
@@ -143,9 +145,7 @@ class ExportDB:
                 # Best-effort cleanup of a stale cache; existence is re-checked below.
                 print(f"warning: could not remove stale cache {self._path}: {exc}", file=sys.stderr)
         if not self._path or not os.path.exists(self._path):
-            raise ItemCacheNotFoundError(
-                f"Item cache not found at {self._path}. Run update first."
-            )
+            self._download_missing_cache()
         try:
             with open(self._path, encoding="utf-8") as f:
                 self._data = json.load(f)
@@ -153,6 +153,39 @@ class ExportDB:
             raise ItemCacheNotFoundError(
                 f"Could not read item cache at {self._path}: {exc}. Run update first."
             ) from exc
+
+    def _download_missing_cache(self) -> None:
+        """Run the ``update`` command to create a missing export database."""
+        if not self._path:
+            raise ItemCacheNotFoundError("Item cache path is not set. Run update first.")
+
+        print(
+            f"Item cache not found at {self._path}. Downloading game data ...",
+            file=sys.stderr,
+        )
+        # Imported lazily to avoid a circular import (the update script imports
+        # this module for inventory helpers).
+        from types import SimpleNamespace
+
+        from warframe_profile.scripts.update_export_db import main as update_main
+
+        try:
+            update_main(
+                SimpleNamespace(
+                    items_cache=self._path,
+                    refresh_items=False,
+                    refresh=False,
+                )
+            )
+        except SystemExit as exc:
+            raise ItemCacheNotFoundError(
+                f"Could not create item cache at {self._path}. Run update first."
+            ) from exc
+
+        if not os.path.exists(self._path):
+            raise ItemCacheNotFoundError(
+                f"Could not create item cache at {self._path}. Run update first."
+            )
 
     @property
     def items(self) -> list[dict]:

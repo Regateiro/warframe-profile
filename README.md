@@ -162,11 +162,15 @@ The default port is **8090** (Steam's `steamwebhelper` commonly occupies
 weapon chains, mastery progression, missing mods, cleanup, and the Foundry
 export. They use the same model functions and derived state as the CLI —
 including mastered-but-sold items — so both show the same recommendations.
-The **Refresh Inventory** button re-scans the game.
+The **Refresh Inventory** button re-scans the game and reloads the page you
+are currently viewing; any expanded crafting results stay open. If the game
+isn't running, a dismissible notification explains why and the cached data
+is kept.
 
 ### Update the item database
 
-This must be run first to download and merge the game data:
+If `export_db.json` is missing, commands download and merge the game data
+automatically. To refresh it manually:
 
 ```bash
 python warframe.py update

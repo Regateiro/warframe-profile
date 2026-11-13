@@ -85,9 +85,89 @@ _PAGE_STYLES = f"""<style>
   .flash {{ padding: 10px 14px; border-radius: 6px; margin: 12px 0;
            background: #1f6feb22; border: 1px solid #1f6feb; color: #58a6ff; }}
   .flash-error {{ background: {RED}22; border-color: {RED}; color: {RED}; }}
+  .notice {{ position: fixed; top: 16px; right: 16px; z-index: 1000;
+            max-width: 380px; margin: 0; display: flex; gap: 12px;
+            align-items: flex-start; box-shadow: 0 8px 24px #0008; }}
+  .notice button {{ background: transparent; border: none; color: inherit;
+                   padding: 0 2px; font-size: 1.1rem; line-height: 1; }}
+  .notice button:hover {{ background: transparent; color: #fff; }}
   @media (max-width: 600px) {{ table {{ font-size: 0.75rem; }}
     th, td {{ padding: 4px 6px; }} }}
 </style>"""
+
+#: Shows a dismissible notification when the page was reached after a failed
+#: inventory refresh (``?refresh_error=…``).  The parameter is stripped from
+#: the address bar once the message has been picked up, so a later manual
+#: reload does not repeat it.
+_NOTICE_JS = """<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const message = params.get("refresh_error");
+  if (!message) return;
+  params.delete("refresh_error");
+  const query = params.toString();
+  history.replaceState(
+    null, "", location.pathname + (query ? "?" + query : "") + location.hash
+  );
+
+  const notice = document.createElement("div");
+  notice.className = "flash flash-error notice";
+  notice.setAttribute("role", "alert");
+  notice.textContent = message;
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.setAttribute("aria-label", "Dismiss notification");
+  close.textContent = "\\u00d7";
+  close.addEventListener("click", () => notice.remove());
+  notice.appendChild(close);
+
+  const nav = document.querySelector("nav");
+  if (nav) nav.after(notice);
+  else document.body.prepend(notice);
+  setTimeout(() => notice.remove(), 15000);
+})();
+</script>"""
+
+
+#: Restores open ``<details>`` sections after the Refresh Inventory reload.
+#:
+#: The refresh form stores the open/closed state in ``sessionStorage`` keyed
+#: by the current path and query, then the reloaded page restores it.  This
+#: keeps expanded crafting results (and other detail sections) open.
+_DETAILS_STATE_JS = """<script>
+(() => {
+  const key = "wf-open-details:" + location.pathname + location.search;
+
+  document.querySelectorAll('form[action="/refresh"]').forEach((form) => {
+    form.addEventListener("submit", () => {
+      const open = Array.from(document.querySelectorAll("details")).map((d) => d.open);
+      try {
+        sessionStorage.setItem(key, JSON.stringify(open));
+      } catch (e) {
+        /* sessionStorage may be unavailable */
+      }
+    });
+  });
+
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(key) || "null");
+  } catch (e) {
+    return;
+  }
+  if (Array.isArray(saved)) {
+    document.querySelectorAll("details").forEach((details, index) => {
+      if (saved[index]) details.open = true;
+    });
+    try {
+      sessionStorage.removeItem(key);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+})();
+</script>"""
 
 
 def _nav_link(key: str, label: str, url: str, active: str) -> str:
@@ -130,6 +210,8 @@ def _page(title: str, content: str, active: str) -> str:
 <h1>Warframe Profile</h1>
 <nav>{tab_links}{_refresh_form()}</nav>
 {content}
+{_NOTICE_JS}
+{_DETAILS_STATE_JS}
 </body>
 </html>"""
 
@@ -576,18 +658,10 @@ def render_relics_safe(needed, relics) -> str:
 #
 
 
-_CRAFT_TAB_BAR = """
-<div class="tab-bar">
-  <a href="/craft" class="active">Item Lookup</a>
-  <a href="/weapon-chains">Weapon Chains</a>
-</div>"""
-
-
 def render_craft(query: str = "", error: str | None = None) -> str:
     """Render the Craft tab with the search form and an optional error message."""
     error_html = f'<p class="red">{html.escape(error)}</p>' if error else ""
-    content = f"""{_CRAFT_TAB_BAR}
-<form method="get" action="/craft" style="margin-bottom:16px">
+    content = f"""<form method="get" action="/craft" style="margin-bottom:16px">
   <input type="text" name="q" placeholder="Search items..."
          value="{html.escape(query, quote=True)}" style="width:300px">
   <button type="submit">Search</button>
@@ -628,16 +702,13 @@ def render_craft_result(
 <summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
 <div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
-    content = (
-        _CRAFT_TAB_BAR
-        + f"""
+    content = f"""
 <form method="get" action="/craft" style="margin-bottom:16px">
   <input type="text" name="q" placeholder="Search items..."
          value="{html.escape(query, quote=True)}" style="width:300px">
   <button type="submit">Search</button>
 </form>
 <div>{"".join(lines)}</div>"""
-    )
     return _page(f"Craft: {query}", content, "craft")
 
 
@@ -704,12 +775,7 @@ def render_weapon_chains(
 
     parts.append(_craft_summary_html(all_requirements, all_craftables))
 
-    tab_bar = """
-<div class="tab-bar">
-  <a href="/craft">Item Lookup</a>
-  <a href="/weapon-chains" class="active">Weapon Chains</a>
-</div>"""
-    return _page("Weapon Chains", tab_bar + "".join(parts), "weapon-chains")
+    return _page("Weapon Chains", "".join(parts), "weapon-chains")
 
 
 # ---------------------------------------------------------------------------
