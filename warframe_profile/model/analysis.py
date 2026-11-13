@@ -128,7 +128,8 @@ class ItemResult:
         mastery_req: Mastery Rank requirement.
         has_copy:    Whether at least one finished copy is owned.
         parts:       List of :class:`PartAnalysis` for each component.
-        can_build:   ``True`` when no parts are missing.
+        can_build:   ``True`` when no parts are missing (including sub-craft
+                     ingredients).
         missing_parts: Total count of missing part copies.
         total_parts: Number of distinct component types.
     """
@@ -1413,6 +1414,91 @@ def _analyze_parts(
     return part_analysis, missing_parts
 
 
+def _can_build_copies(
+    un: str,
+    copies: int,
+    prime_map: dict,
+    owned: dict,
+    depth: int = 0,
+) -> bool:
+    """Whether *copies* more of a Prime item can be built from owned parts.
+
+    Checks every recipe component (tradable or not) and recurses into Prime
+    ingredients, so nested sub-crafts (an akimbo variant that itself needs a
+    finished Prime weapon) are accounted for.  Recursion is capped at two
+    levels because deeper Prime-in-Prime chains do not occur in practice.
+    """
+    info = prime_map.get(un)
+    if not info or not info["parts"]:
+        return True
+
+    for part in info.get("all_parts") or info["parts"]:
+        need = part["count"] * copies
+        have = owned.get(normalize_path(part["uniqueName"]), 0)
+        if have >= need:
+            continue
+        gap = need - have
+        dep = prime_map.get(part["uniqueName"])
+        if (
+            depth < 2
+            and dep
+            and dep["parts"]
+            and _can_build_copies(part["uniqueName"], gap, prime_map, owned, depth + 1)
+        ):
+            continue
+        return False
+    return True
+
+
+def _analyze_subcraft_parts(
+    info: dict,
+    prime_map: dict,
+    needed_builds: int,
+    owned: dict,
+) -> tuple[list[PartAnalysis], int]:
+    """Find Prime ingredients that are missing and cannot be crafted.
+
+    Akimbo Prime weapons consume finished Prime weapons (e.g. two Magnus
+    Prime for Akmagnus Prime).  Those ingredients are non-tradable, so they
+    are absent from ``info["parts"]`` and would otherwise be invisible to
+    the buildable check.  Returns synthetic part entries plus the number of
+    missing ingredient copies.
+    """
+    tradable = {part["uniqueName"] for part in info["parts"]}
+    analysis: list[PartAnalysis] = []
+    missing_parts = 0
+
+    for part in info.get("all_parts", []):
+        dep_un = part["uniqueName"]
+        if dep_un in tradable:
+            continue
+        dep = prime_map.get(dep_un)
+        if not dep or not dep["parts"]:
+            continue
+
+        required = part["count"] * needed_builds
+        owned_qty = owned.get(normalize_path(dep_un), 0)
+        if owned_qty >= required:
+            continue
+        deficit = required - owned_qty
+        if _can_build_copies(dep_un, deficit, prime_map, owned):
+            continue
+
+        analysis.append(
+            PartAnalysis(
+                name=part.get("name") or dep["name"],
+                owned=owned_qty,
+                needed=part["count"],
+                surplus=0,
+                missing=deficit,
+                ducats=0,
+            )
+        )
+        missing_parts += deficit
+
+    return analysis, missing_parts
+
+
 def _make_item_result(
     name: str,
     category: str,
@@ -1463,6 +1549,13 @@ def _classify_prime_item(
     part_analysis, missing_parts = _analyze_parts(
         info, prime_map, needed_builds, owned, owned_finished, comp_to_bp=comp_to_bp
     )  # noqa: E501
+    subcraft_parts, subcraft_missing = _analyze_subcraft_parts(
+        info, prime_map, needed_builds, owned
+    )
+    if subcraft_parts:
+        part_analysis.extend(subcraft_parts)
+        missing_parts += subcraft_missing
+    total_parts = len(info["parts"]) + len(subcraft_parts)
 
     if has_copy:
         return _make_item_result(
@@ -1475,7 +1568,7 @@ def _classify_prime_item(
             True,
             missing_parts == 0,
             missing_parts,
-            len(info["parts"]),
+            total_parts,
             part_analysis,
         ), None  # noqa: E501
     elif missing_parts == 0 and info["parts"]:
@@ -1489,7 +1582,7 @@ def _classify_prime_item(
             False,
             True,
             0,
-            len(info["parts"]),
+            total_parts,
             part_analysis,
         ), None  # noqa: E501
     elif any(p.owned > 0 for p in part_analysis):
@@ -1503,7 +1596,7 @@ def _classify_prime_item(
             False,
             missing_parts == 0,
             missing_parts,
-            len(info["parts"]),
+            total_parts,
             part_analysis,
         ), None  # noqa: E501
     elif info["masterable"]:
@@ -1528,7 +1621,8 @@ def analyze(
     It classifies every Prime item into one of four statuses:
 
     * ``have_copy`` — player owns a finished copy.
-    * ``buildable`` — all parts owned, ready to build.
+    * ``buildable`` — all parts are owned, including sub-craft ingredients
+      such as the finished Prime weapons consumed by akimbo variants.
     * ``partial`` — some parts owned, some missing.
     * Missing — zero parts owned (added to ``missing_primes`` list).
 

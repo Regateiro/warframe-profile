@@ -141,6 +141,25 @@ def _print_summary_line(items, total_safe, total_keep) -> None:
     print(f"  {', '.join(parts_label)}  |  {total_safe:,} ducats safe  {total_keep:,} ducats keep")
 
 
+def _print_buildable_section(items) -> None:
+    """Print the 'Ready to Build' table."""
+    buildable = sorted(
+        (i for i in items if i.status == "buildable"),
+        key=lambda i: (i.category, i.name),
+    )
+    if not buildable:
+        return
+
+    t = _new_table(
+        [("Name", "l"), ("Category", "l"), ("MR", "r")],
+        title="Ready to Build",
+    )
+    for i in buildable:
+        t.add_row([i.name, i.category, i.mastery_req or ""])
+    print(t)
+    print()
+
+
 def _print_excess_parts_section(relevant, n_silent) -> None:
     """Print the 'Excess Prime Parts' table."""
     if not relevant:
@@ -228,6 +247,7 @@ def print_report(data: AnalysisResult) -> None:
 
     _print_missing_primes_section(data.missing)
     _print_summary_line(data.items, data.total_ducats_safe, data.total_ducats_keep)
+    _print_buildable_section(data.items)
     _print_excess_parts_section(relevant, n_silent)
     _print_sell_ducats_section(data.items, data.total_ducats_safe)
 

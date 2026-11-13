@@ -17,6 +17,7 @@ This module is the **web view** in the MVP pattern.
 import html
 import math
 from collections import defaultdict
+from urllib.parse import quote_plus
 
 from warframe_profile.model.craft_model import (
     add_missing_blueprint_requirement,
@@ -74,6 +75,8 @@ _PAGE_STYLES = f"""<style>
   tbody tr:nth-child(even) {{ background: #111920; }}
   tbody tr:hover {{ background: #161b22; }}
   .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  td a {{ color: #58a6ff; text-decoration: none; }}
+  td a:hover {{ text-decoration: underline; }}
   .green {{ color: {GREEN}; }} .red {{ color: {RED}; }} .yellow {{ color: {YELLOW}; }}
   .dim {{ color: {DIM}; }}
   summary {{ cursor: pointer; padding: 4px 0; font-weight: 600; color: #58a6ff; }}
@@ -258,6 +261,7 @@ def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
 
 _DUCATS_SUBTABS = [
     ("missing", "Missing", "/ducats"),
+    ("buildable", "Ready to Build", "/ducats/buildable"),
     ("excess", "Excess", "/ducats/excess"),
     ("sell", "Sell", "/ducats/sell"),
 ]
@@ -545,6 +549,33 @@ def render_ducats_missing(data) -> str:
     return _page("Ducats — Missing", content, "ducats")
 
 
+def render_ducats_buildable(data) -> str:
+    """Render the Ducats — Ready to Build sub-view."""
+    buildable = sorted(
+        (i for i in data.items if i.status == "buildable"),
+        key=lambda i: (i.category, i.name),
+    )
+    parts = []
+    if buildable:
+        rows = "".join(
+            f"<tr><td>{_esc(i.name)}</td><td>{_esc(i.category)}</td>"
+            f'<td class="num">{i.mastery_req or ""}</td></tr>'
+            for i in buildable
+        )
+        parts.append(f"""<h2>Ready to Build</h2>
+<table><thead><tr><th>Name</th><th>Category</th><th class='num'>MR</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p class="dim">Every part and sub-craft ingredient is owned.</p>""")
+    else:
+        parts.append(
+            '<div class="flash">Nothing is ready to build right now \u2014 '
+            "items appear here when every part and sub-craft ingredient is owned.</div>"
+        )
+
+    content = _subtab_bar(_DUCATS_SUBTABS, "buildable") + "".join(parts)
+    return _page("Ducats — Ready to Build", content, "ducats")
+
+
 def render_ducats_excess(data) -> str:
     """Render the Ducats — Excess sub-view (missing and surplus prime parts)."""
     items = data.items
@@ -699,10 +730,12 @@ def render_craft_result(
 ) -> str:
     """Render search results as expandable crafting trees with summaries."""
     lines = []
+    query_norm = query.strip().lower()
     for m in matches:
         un = m.get("uniqueName", "")
         name = resolve_name(m.get("name", ""), loc_dict) or un.split("/")[-1]
         cat = m.get("category", "")
+        exact = name.lower() == query_norm
         tree = _tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)
         req, craft = resolve_tree(
             un,
@@ -717,7 +750,7 @@ def render_craft_result(
         requirements = postprocess_craft_plan(
             req, craft, owned, items_by_un, recipes_by_result, loc_dict
         )
-        lines.append(f"""<details>
+        lines.append(f"""<details{" open" if exact else ""}>
 <summary style="font-size:1rem">{_esc(name)} <span class="dim">({_esc(cat)})</span></summary>
 <div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
@@ -802,10 +835,22 @@ def render_weapon_chains(
 #
 
 
-def _mastery_table(rows) -> str:
-    """Render one Item / Category / MR / Source table."""
+def _mastery_table(rows, link_craft: bool = False) -> str:
+    """Render one Item / Category / MR / Source table.
+
+    When *link_craft* is true each item name links to its crafting breakdown
+    on the Craft tab.
+    """
+
+    def _name_cell(row) -> str:
+        name = html.escape(row.name)
+        if not link_craft:
+            return name
+        href = html.escape(f"/craft?q={quote_plus(row.name)}", quote=True)
+        return f'<a href="{href}">{name}</a>'
+
     body = "".join(
-        f"<tr><td>{html.escape(row.name)}</td>"
+        f"<tr><td>{_name_cell(row)}</td>"
         f"<td>{html.escape(row.category)}</td>"
         f'<td class="num">{row.mr:,}</td>'
         f"<td>{html.escape(row.source)}</td></tr>"
@@ -841,7 +886,7 @@ def render_mastery(report) -> str:
         )
 
         if not section.group_by_tier:
-            parts.append(_mastery_table(section.rows))
+            parts.append(_mastery_table(section.rows, link_craft=section.link_craft))
             continue
 
         for group in section.tier_groups:
@@ -851,7 +896,7 @@ def render_mastery(report) -> str:
                 f"<p>{group.count} item{'s' if group.count != 1 else ''}"
                 f" &mdash; ~{group.mr:,} MR</p>"
             )
-            parts.append(_mastery_table(group.rows))
+            parts.append(_mastery_table(group.rows, link_craft=section.link_craft))
 
     parts.append(
         f"<p><strong>{report.remaining} items remaining"

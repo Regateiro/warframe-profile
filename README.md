@@ -215,9 +215,16 @@ python warframe.py ducats --sell-only
 The analysis shows:
 
 - **Missing Prime items** — masterable Primes where you own zero parts.
+- **Ready to Build** — Primes whose every part is owned, including finished
+  Prime weapons consumed by akimbo variants (e.g. two Magnus Prime for
+  Akmagnus Prime). An item only counts as buildable when those sub-crafts
+  can actually be made from owned parts.
 - **Excess Prime parts** — per-item breakdown of missing and spare components.
 - **Ducat summary** — total ducats from surplus parts and from parts you
   need to keep for builds.
+
+In the web UI these appear as separate **Missing**, **Ready to Build**,
+**Excess**, and **Sell** sub-tabs.
 
 ### Crafting tree browser
 

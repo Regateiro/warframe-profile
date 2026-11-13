@@ -70,6 +70,7 @@ from warframe_profile.view.web.templates import (
     render_cleanup_sell,
     render_craft,
     render_craft_result,
+    render_ducats_buildable,
     render_ducats_excess,
     render_ducats_missing,
     render_ducats_sell,
@@ -484,9 +485,11 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         self._html(200, render_home())
 
     def _handle_ducats(self, subpath: str):
-        """Serve ducat analysis sub-views (missing / excess / sell)."""
+        """Serve ducat analysis sub-views (missing / buildable / excess / sell)."""
         _ensure_analysis()
-        if subpath == "/excess":
+        if subpath == "/buildable":
+            self._html(200, render_ducats_buildable(_cache.analysis_result))
+        elif subpath == "/excess":
             self._html(200, render_ducats_excess(_cache.analysis_result))
         elif subpath == "/sell":
             self._html(200, render_ducats_sell(_cache.analysis_result))
@@ -637,7 +640,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
         Routes:
             /               → Home
-            /ducats[/...]   → Ducat analysis (missing / excess / sell)
+            /ducats[/...]   → Ducat analysis (missing / buildable / excess / sell)
             /relics[/...]   → Relic analysis (needed drops / safe-to-spam)
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains

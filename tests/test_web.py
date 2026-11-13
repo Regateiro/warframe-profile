@@ -8,6 +8,11 @@ from warframe_profile.model.analysis import (
     MissingPrime,
     PartAnalysis,
 )
+from warframe_profile.presenter.mastery import (
+    MasteryReport,
+    MasteryRow,
+    MasterySection,
+)
 from warframe_profile.presenter.web_server import (
     _display_host,
     _is_loopback,
@@ -19,8 +24,11 @@ from warframe_profile.view.web.templates import (
     _esc,
     _item_row,
     render_cleanup_rebuy,
+    render_craft_result,
+    render_ducats_buildable,
     render_ducats_missing,
     render_home,
+    render_mastery,
     render_relics_safe,
 )
 
@@ -158,6 +166,35 @@ def test_render_ducats_missing_escapes_names():
     assert "&lt;b&gt;Cat&lt;/b&gt;" in page
 
 
+def test_render_ducats_buildable_lists_ready_items():
+    item = ItemResult(
+        name="Akmagnus Prime",
+        category="Secondary",
+        status="buildable",
+        needed_builds=1,
+        extra_builds=0,
+        mastery_req=14,
+        has_copy=False,
+        parts=[],
+        can_build=True,
+        missing_parts=0,
+        total_parts=2,
+    )
+
+    page = render_ducats_buildable(AnalysisResult(items=[item]))
+
+    assert "Akmagnus Prime" in page
+    assert "/ducats/buildable" in page
+    assert "Nothing is ready to build" not in page
+
+
+def test_render_ducats_buildable_shows_empty_state():
+    page = render_ducats_buildable(AnalysisResult())
+
+    assert "Nothing is ready to build" in page
+    assert "/ducats/buildable" in page
+
+
 def test_item_row_escapes_item_and_part_names():
     item = ItemResult(
         name="Lato Prime <b>X</b>",
@@ -212,3 +249,54 @@ def test_render_cleanup_rebuy_escapes_equipment_names():
 
     assert "<b>Braton</b>" not in page
     assert "&lt;b&gt;Braton&lt;/b&gt;" in page
+
+
+def test_render_mastery_links_blueprint_rows_to_craft():
+    blueprint = MasteryRow(
+        name="Silva & Aegis Prime",
+        category="Melee",
+        mr=14,
+        source="Market",
+    )
+    other = MasteryRow(name="Lato Prime", category="Secondary", mr=14, source="Void")
+    report = MasteryReport(
+        total=2,
+        mastered=0,
+        sections=[
+            MasterySection(
+                header="BLUEPRINT READY",
+                desc="Blueprint owned",
+                rows=[blueprint],
+                group_by_tier=False,
+                link_craft=True,
+            ),
+            MasterySection(
+                header="NEVER TOUCHED",
+                desc="No XP recorded",
+                rows=[other],
+                group_by_tier=False,
+            ),
+            MasterySection(header="IN PROGRESS", desc="Partial XP"),
+        ],
+    )
+
+    page = render_mastery(report)
+
+    assert 'href="/craft?q=Silva+%26+Aegis+Prime"' in page
+    assert "Silva &amp; Aegis Prime" in page
+    assert 'href="/craft?q=Lato+Prime"' not in page
+
+
+def test_render_craft_result_opens_exact_match():
+    item = {
+        "uniqueName": "/Lotus/Weapons/Tenno/LatoPrime",
+        "name": "Lato Prime",
+        "category": "Secondary",
+    }
+    items_by_un = {item["uniqueName"].lower(): item}
+
+    exact = render_craft_result("Lato Prime", [item], items_by_un, {}, {}, {})
+    partial = render_craft_result("Lato", [item], items_by_un, {}, {}, {})
+
+    assert "<details open>" in exact
+    assert "<details open>" not in partial

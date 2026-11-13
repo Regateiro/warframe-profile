@@ -650,6 +650,7 @@ class MasterySection:
     rows: list[MasteryRow] = field(default_factory=list)
     group_by_tier: bool = True
     tier_groups: list[MasteryTierGroup] = field(default_factory=list)
+    link_craft: bool = False
 
     @property
     def count(self) -> int:
@@ -719,6 +720,7 @@ def build_mastery_report(db: ExportDB, inv: dict) -> MasteryReport:
             desc="Blueprint owned — farm materials to build",
             rows=_mastery_rows(blueprints_ready),
             group_by_tier=False,
+            link_craft=True,
         ),
         MasterySection(
             header="NEVER TOUCHED",
