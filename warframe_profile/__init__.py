@@ -1,9 +1,9 @@
 """Warframe prime part inventory analyzer.
 
 Packages the analysis, CLI, and data-fetching modules under a single
-namespace.  The only top-level export is DATA_DIR, which points at the
-per-user data directory (``~/.local/share`` on Linux, ``%LOCALAPPDATA%``
-on Windows).
+namespace.  Top-level constants are the per-user :data:`DATA_DIR` (the
+``~/.local/share`` directory on Linux, ``%LOCALAPPDATA%`` on Windows) plus
+the shared HTTP timeout and user-agent strings.
 """
 
 import os
@@ -25,9 +25,6 @@ def _default_data_dir() -> str:
 #: ``%LOCALAPPDATA%\\warframe-profile`` on Windows; override with the
 #: ``WARFRAME_DATA_DIR`` environment variable.
 DATA_DIR = os.environ.get("WARFRAME_DATA_DIR") or _default_data_dir()
-
-#: Default DE account ID used for profile display fallback.
-DEFAULT_ACCOUNT_ID = "57c71e613ade7fa2a211997b"
 
 #: HTTP request timeout in seconds (used by inventory, drop data, and update scripts).
 HTTP_TIMEOUT = 30

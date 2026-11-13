@@ -36,7 +36,7 @@ WIN_PYTHON         ?= $(WIN_PYTHON_DIR)\python.exe
 WIN_PYTHON_EXE     ?= $(WINEPREFIX)/drive_c/$(WIN_PYTHON_NAME)/python.exe
 WIN_INSTALLER      ?= $(WINEPREFIX)/python-$(WIN_PYTHON_VERSION)-amd64.exe
 
-.PHONY: help install update run lint format check clean clean-data \
+.PHONY: help install update run lint format check test clean clean-data \
 	build-deps build-linux install-linux uninstall-linux wine-setup build-windows clean-build clean-wine
 
 help: ## Show this help
@@ -67,6 +67,9 @@ format: ## Auto-format the code with ruff
 check: ## Verify formatting and lint without modifying files (CI-friendly)
 	$(POETRY) run ruff format --check .
 	$(POETRY) run ruff check .
+
+test: ## Run the test suite with pytest
+	$(POETRY) run pytest
 
 # ---------------------------------------------------------------------------
 # Linux executable

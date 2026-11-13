@@ -15,6 +15,8 @@ All data is loaded once at startup (in ``load_all``) and analysis results
 are computed lazily when first requested.
 """
 
+import functools
+import html
 import http.server
 import json
 import os
@@ -22,6 +24,7 @@ import signal
 import socketserver
 import sys
 import threading
+import traceback
 import urllib.parse
 
 from warframe_profile import DATA_DIR
@@ -96,7 +99,31 @@ def _parse_port() -> int:
         return 8090
 
 
+#: Bind address used when neither ``--host`` nor ``WARFRAME_WEB_HOST`` is set.
+#: The UI has no authentication and can trigger a memory scan, so it must not
+#: be reachable from the network by default.
+DEFAULT_HOST = "127.0.0.1"
+
+
+def _parse_host() -> str:
+    """Return the default bind address (``WARFRAME_WEB_HOST`` or loopback)."""
+    return os.environ.get("WARFRAME_WEB_HOST") or DEFAULT_HOST
+
+
+def _display_host(host: str) -> str:
+    """Return a URL-friendly host: wildcard binds are shown as ``localhost``."""
+    if host in {"0.0.0.0", "::", ""}:
+        return "localhost"
+    return host
+
+
+def _is_loopback(host: str) -> bool:
+    """Return whether *host* is a loopback address (no network exposure)."""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
 PORT = _parse_port()
+HOST = _parse_host()
 
 
 # ---------------------------------------------------------------------------
@@ -112,32 +139,39 @@ class DataCache:
     """Singleton holding all loaded data and lazy-computed analysis caches.
 
     Attributes are populated by ``load_all`` (called at startup) and the
-    ``_ensure_*`` methods (called on first request).
+    ``_ensure_*`` methods (called on first request).  Every derived value is
+    reset by :meth:`reset` when the inventory is refreshed.
     """
 
-    db: ExportDB | None = None
-    inventory: dict = {}
-    owned: dict = {}
-    mastered: set[str] = set()
-    items_by_un: dict = {}
-    recipes_by_result: dict = {}
-    loc_dict: dict = {}
-    by_name: dict = {}
-    # Analysis caches (lazy-computed via _ensure_* methods)
-    prime_map: dict[str, dict] | None = None
-    owned_finished: set[str] | None = None
-    extra_builds: dict[str, int] | None = None
-    analysis_result: AnalysisResult | None = None
-    relic_info: list[RelicInfo] | None = None
-    needed_drops: list[NeededPart] | None = None
-    sellable: list[SellableEquipment] | None = None
-    owned_prime_pairs: list[tuple[str, str, str]] | None = None
-    excess_items: list[ExcessItem] | None = None
-    weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
-    foundry_export: dict | None = None
-    foundry_settings: tuple | None = None
-    mastery_report: MasteryReport | None = None
-    mods_report: ModsReport | None = None
+    def __init__(self) -> None:
+        """Initialise the cache to its empty state."""
+        self.db: ExportDB | None = None
+        self.inventory: dict = {}
+        self.owned: dict = {}
+        self.mastered: set[str] = set()
+        self.items_by_un: dict = {}
+        self.recipes_by_result: dict = {}
+        self.loc_dict: dict = {}
+        self.by_name: dict = {}
+        self.reset()
+
+    def reset(self) -> None:
+        """Drop every lazily-computed result derived from the inventory."""
+        # Analysis caches (lazy-computed via _ensure_* methods)
+        self.prime_map: dict[str, dict] | None = None
+        self.owned_finished: set[str] | None = None
+        self.extra_builds: dict[str, int] | None = None
+        self.analysis_result: AnalysisResult | None = None
+        self.relic_info: list[RelicInfo] | None = None
+        self.needed_drops: list[NeededPart] | None = None
+        self.sellable: list[SellableEquipment] | None = None
+        self.owned_prime_pairs: list[tuple[str, str, str]] | None = None
+        self.excess_items: list[ExcessItem] | None = None
+        self.weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
+        self.foundry_export: dict | None = None
+        self.foundry_settings: tuple | None = None
+        self.mastery_report: MasteryReport | None = None
+        self.mods_report: ModsReport | None = None
 
 
 _cache = DataCache()
@@ -190,20 +224,44 @@ def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
 
 def invalidate_analysis() -> None:
     """Drop every lazily-computed result derived from the inventory."""
-    _cache.prime_map = None
-    _cache.owned_finished = None
-    _cache.extra_builds = None
-    _cache.analysis_result = None
-    _cache.relic_info = None
-    _cache.needed_drops = None
-    _cache.sellable = None
-    _cache.owned_prime_pairs = None
-    _cache.excess_items = None
-    _cache.weapon_chains = None
-    _cache.foundry_export = None
-    _cache.foundry_settings = None
-    _cache.mastery_report = None
-    _cache.mods_report = None
+    _cache.reset()
+
+
+def _lazy(attr: str):
+    """Return a decorator that computes a cache attribute at most once.
+
+    The server is threaded, so an unlocked check-then-act would double-compute
+    on concurrent first requests.  The attribute is re-checked under the cache
+    lock; the decorated function is expected to write ``_cache.<attr>``.
+    """
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if getattr(_cache, attr) is not None:
+                return
+            with _cache_lock:
+                if getattr(_cache, attr) is None:
+                    fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def _is_same_origin_request(origin: str, referer: str, host: str) -> bool:
+    """Return whether a request's ``Origin``/``Referer`` matches *host*.
+
+    Browsers send ``Origin`` on cross-origin POSTs and ``Referer`` on
+    same-origin form submissions.  A request with neither header (e.g.
+    ``curl``) is allowed, so scripted refreshes keep working.
+    """
+    for raw in (origin, referer):
+        if not raw:
+            continue
+        parsed = urllib.parse.urlparse(raw)
+        return bool(parsed.netloc) and parsed.netloc == host
+    return True
 
 
 def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> None:
@@ -212,139 +270,123 @@ def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> No
     reload_inventory(inventory_path, refresh)
 
 
+@_lazy("prime_map")
 def _ensure_prime_map():
     """Build the prime map once (shared by the ducat and relic analyses)."""
-    if _cache.prime_map is None:
-        _cache.prime_map = build_prime_map(_require_db().raw.get("items", []))
+    _cache.prime_map = build_prime_map(_require_db().raw.get("items", []))
 
 
+@_lazy("owned_finished")
 def _ensure_owned_state():
     """Build ``owned_finished`` / ``extra_builds`` once per inventory load."""
-    if _cache.owned_finished is None or _cache.extra_builds is None:
-        _ensure_prime_map()
-        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-        _cache.owned_finished = compute_owned_finished(
-            _cache.inventory, EQUIPMENT_SECTIONS, _cache.mastered
-        )
-        _cache.extra_builds = compute_extra_builds(
-            _cache.prime_map, _cache.owned, _cache.owned_finished
-        )
+    _ensure_prime_map()
+    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
+    _cache.owned_finished = compute_owned_finished(
+        _cache.inventory, EQUIPMENT_SECTIONS, _cache.mastered
+    )
+    _cache.extra_builds = compute_extra_builds(
+        _cache.prime_map, _cache.owned, _cache.owned_finished
+    )
 
 
+@_lazy("analysis_result")
 def _ensure_analysis():
     """Lazy-load ducat analysis: Prime map, analysis result, sellable equipment,
     and owned prime pairs."""
-    if _cache.analysis_result is not None:
-        return
-    with _cache_lock:
-        if _cache.analysis_result is not None:
-            return
-        items = _require_db().items
-        _ensure_prime_map()
-        _ensure_owned_state()
-        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-        prime_map = _cache.prime_map
-        _cache.analysis_result = analyze(
-            _cache.inventory,
-            prime_map,
-            EQUIPMENT_SECTIONS,
-            mastered=_cache.mastered,
-            recipes=_require_db().recipes,
-            owned=_cache.owned,
-            owned_finished=_cache.owned_finished,
-            extra_builds=_cache.extra_builds,
-        )
-        _cache.sellable = compute_sellable_equipment(
-            _require_db(),
-            _cache.inventory,
-            EQUIPMENT_SECTIONS,
-        )
-        # CLI parity: print_report reads sellable off the analysis result.
-        _cache.analysis_result.sellable = _cache.sellable
-        item_index = build_item_index(items)
-        reg_to_prime = build_regular_to_prime_map(items)
-        owned_regular = find_owned_item_uns(_cache.inventory, item_index, EQUIPMENT_SECTIONS)
-        owned_primes = find_owned_prime_uns(_cache.inventory, prime_map, EQUIPMENT_SECTIONS)
-        _cache.owned_prime_pairs = []
-        for reg_un in owned_regular:
-            pi = reg_to_prime.get(reg_un)
-            if pi and pi["prime_un"] in owned_primes:
-                item = _cache.items_by_un.get(normalize_path(reg_un), {})
-                _cache.owned_prime_pairs.append(
-                    (
-                        item.get("name", reg_un),
-                        item.get("category", ""),
-                        pi["prime_name"],
-                    )
+    items = _require_db().items
+    _ensure_prime_map()
+    _ensure_owned_state()
+    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
+    prime_map = _cache.prime_map
+    _cache.analysis_result = analyze(
+        _cache.inventory,
+        prime_map,
+        EQUIPMENT_SECTIONS,
+        mastered=_cache.mastered,
+        recipes=_require_db().recipes,
+        owned=_cache.owned,
+        owned_finished=_cache.owned_finished,
+        extra_builds=_cache.extra_builds,
+    )
+    _cache.sellable = compute_sellable_equipment(
+        _require_db(),
+        _cache.inventory,
+        EQUIPMENT_SECTIONS,
+    )
+    # CLI parity: print_report reads sellable off the analysis result.
+    _cache.analysis_result.sellable = _cache.sellable
+    item_index = build_item_index(items)
+    reg_to_prime = build_regular_to_prime_map(items)
+    owned_regular = find_owned_item_uns(_cache.inventory, item_index, EQUIPMENT_SECTIONS)
+    owned_primes = find_owned_prime_uns(_cache.inventory, prime_map, EQUIPMENT_SECTIONS)
+    _cache.owned_prime_pairs = []
+    for reg_un in owned_regular:
+        pi = reg_to_prime.get(reg_un)
+        if pi and pi["prime_un"] in owned_primes:
+            item = _cache.items_by_un.get(normalize_path(reg_un), {})
+            _cache.owned_prime_pairs.append(
+                (
+                    item.get("name", reg_un),
+                    item.get("category", ""),
+                    pi["prime_name"],
                 )
+            )
 
 
+@_lazy("excess_items")
 def _ensure_excess():
     """Lazy-load excess blueprints and components analysis."""
-    if _cache.excess_items is not None:
-        return
-    with _cache_lock:
-        if _cache.excess_items is not None:
-            return
-        _ensure_owned_state()
-        assert _cache.owned_finished is not None  # guaranteed by _ensure_owned_state
-        _cache.excess_items = find_excess_blueprints_and_components(
-            _cache.inventory,
-            _cache.items_by_un,
-            _require_db().recipes,
-            _cache.owned,
-            _cache.owned_finished,
-            _cache.loc_dict,
-            mastered=_cache.mastered,
-        )
+    _ensure_owned_state()
+    assert _cache.owned_finished is not None  # guaranteed by _ensure_owned_state
+    _cache.excess_items = find_excess_blueprints_and_components(
+        _cache.inventory,
+        _cache.items_by_un,
+        _require_db().recipes,
+        _cache.owned,
+        _cache.owned_finished,
+        _cache.loc_dict,
+        mastered=_cache.mastered,
+    )
 
 
+@_lazy("relic_info")
 def _ensure_relics():
     """Lazy-load relic analysis: safe-to-spam relics and needed drops."""
-    if _cache.relic_info is not None:
-        return
-    with _cache_lock:
-        if _cache.relic_info is not None:
-            return
-        items = _require_db().items
-        _ensure_owned_state()
-        assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-        _cache.relic_info = build_relics_map(
-            items,
-            _cache.inventory,
-            _cache.prime_map,
-            _cache.owned,
-            EQUIPMENT_SECTIONS,
-            mastered=_cache.mastered,
-            owned_finished=_cache.owned_finished,
-            extra_builds=_cache.extra_builds,
-        )
-        _cache.needed_drops = build_needed_drops(
-            items,
-            _cache.inventory,
-            _cache.prime_map,
-            _cache.owned,
-            EQUIPMENT_SECTIONS,
-            mastered=_cache.mastered,
-            owned_finished=_cache.owned_finished,
-            extra_builds=_cache.extra_builds,
-        )
+    items = _require_db().items
+    _ensure_owned_state()
+    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
+    _cache.relic_info = build_relics_map(
+        items,
+        _cache.inventory,
+        _cache.prime_map,
+        _cache.owned,
+        EQUIPMENT_SECTIONS,
+        mastered=_cache.mastered,
+        owned_finished=_cache.owned_finished,
+        extra_builds=_cache.extra_builds,
+    )
+    _cache.needed_drops = build_needed_drops(
+        items,
+        _cache.inventory,
+        _cache.prime_map,
+        _cache.owned,
+        EQUIPMENT_SECTIONS,
+        mastered=_cache.mastered,
+        owned_finished=_cache.owned_finished,
+        extra_builds=_cache.extra_builds,
+    )
 
 
+@_lazy("weapon_chains")
 def _ensure_weapon_chains():
     """Lazy-load weapon upgrade chains."""
-    if _cache.weapon_chains is not None:
-        return
-    with _cache_lock:
-        if _cache.weapon_chains is not None:
-            return
-        _cache.weapon_chains = build_weapon_chains(
-            _cache.items_by_un,
-            _cache.recipes_by_result,
-            _cache.owned,
-            _cache.loc_dict,
-            mastered=_cache.mastered,
-        )
+    _cache.weapon_chains = build_weapon_chains(
+        _cache.items_by_un,
+        _cache.recipes_by_result,
+        _cache.owned,
+        _cache.loc_dict,
+        mastered=_cache.mastered,
+    )
 
 
 def _ensure_foundry_export(settings: dict | None):
@@ -362,24 +404,16 @@ def _ensure_foundry_export(settings: dict | None):
         return _cache.foundry_export
 
 
+@_lazy("mastery_report")
 def _ensure_mastery():
     """Lazy-load the mastery progression report."""
-    if _cache.mastery_report is not None:
-        return
-    with _cache_lock:
-        if _cache.mastery_report is not None:
-            return
-        _cache.mastery_report = build_mastery_report(_require_db(), _cache.inventory)
+    _cache.mastery_report = build_mastery_report(_require_db(), _cache.inventory)
 
 
+@_lazy("mods_report")
 def _ensure_mods():
     """Lazy-load the missing-mods report."""
-    if _cache.mods_report is not None:
-        return
-    with _cache_lock:
-        if _cache.mods_report is not None:
-            return
-        _cache.mods_report = build_mods_report(_require_db(), _cache.inventory)
+    _cache.mods_report = build_mods_report(_require_db(), _cache.inventory)
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +458,14 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         if parsed_ref.query:
             path += "?" + parsed_ref.query
         return path
+
+    def _is_same_origin(self) -> bool:
+        """Return ``False`` for cross-origin POSTs (basic CSRF protection)."""
+        return _is_same_origin_request(
+            self.headers.get("Origin", ""),
+            self.headers.get("Referer", ""),
+            self.headers.get("Host", ""),
+        )
 
     def _handle_home(self):
         """Serve the home page."""
@@ -597,10 +639,11 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._html(404, "<h1>404 Not Found</h1>")
         except Exception as e:
-            import traceback
-
-            tb = traceback.format_exc()
-            self._html(500, f"<h1>500 Error</h1><pre>{e}\n{tb}</pre>")
+            # Keep the full traceback in the console; never send internals to
+            # the browser (the server can be bound to a LAN address).
+            traceback.print_exc()
+            message = f"{type(e).__name__}: {e}"[:300]
+            self._html(500, f"<h1>500 Error</h1><pre>{html.escape(message)}</pre>")
 
     def do_POST(self):
         """Handle POST requests — currently only /refresh."""
@@ -608,6 +651,9 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
 
         if path == "/refresh":
+            if not self._is_same_origin():
+                self._html(403, "<h1>403 Forbidden</h1>")
+                return
             inv_path = os.path.join(DATA_DIR, "inventory.json")
             return_path = self._return_path()
             try:
@@ -635,26 +681,42 @@ def main(args) -> None:
     inv_path = getattr(args, "inventory", "") or os.path.join(DATA_DIR, "inventory.json")
     refresh = getattr(args, "refresh", False)
     port = getattr(args, "port", None) or PORT
+    host = getattr(args, "host", None) or HOST
+    display_host = _display_host(host)
 
     print("[web] Loading data…", file=sys.stderr)
     load_all(items_cache, inv_path, refresh)
-    print(f"[web] Data loaded. Starting server on http://0.0.0.0:{port}", file=sys.stderr)
+    print(
+        f"[web] Data loaded. Starting server on http://{display_host}:{port}",
+        file=sys.stderr,
+    )
 
     class ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True
         daemon_threads = True
 
     try:
-        server = ThreadedServer(("0.0.0.0", port), WarframeHandler)
+        server = ThreadedServer((host, port), WarframeHandler)
     except OSError as exc:
         print(
-            f"[web] Could not bind port {port}: {exc}. Use --port or set WARFRAME_WEB_PORT.",
+            f"[web] Could not bind {host}:{port}: {exc}. "
+            "Use --host/--port or set WARFRAME_WEB_HOST/WARFRAME_WEB_PORT.",
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
 
+    if not _is_loopback(host):
+        print(
+            f"[web] warning: bound to {host}, which is reachable from the network. "
+            "This UI has no authentication; only expose it on trusted networks.",
+            file=sys.stderr,
+        )
+
     with server as httpd:
-        print(f"[web] Serving at http://0.0.0.0:{port}", file=sys.stderr)
+        print(
+            f"[web] Serving at http://{display_host}:{port} (bound to {host}:{port})",
+            file=sys.stderr,
+        )
 
         def _handle_interrupt(signum, frame):
             """Turn the first Ctrl+C into a clean exit and ignore the rest.

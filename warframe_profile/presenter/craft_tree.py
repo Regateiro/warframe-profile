@@ -39,14 +39,7 @@ from warframe_profile.view.report import (
 def _load_export_db(items_cache: str) -> tuple:
     """Load the export DB and build item/recipe/name indices."""
     xdb = ExportDB(items_cache)
-    try:
-        xdb.load()
-    except FileNotFoundError:
-        print(
-            "Export database not found. Run `python warframe.py update` first.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    xdb.load()
     loc_dict = xdb.locale
     raw = xdb.raw
     items_by_un = build_items_by_un(raw)
@@ -57,13 +50,9 @@ def _load_export_db(items_cache: str) -> tuple:
 
 def _load_inventory(inv_path: str, refresh: bool, raw: dict) -> tuple[dict, dict]:
     """Load inventory and return ``(owned, inv)``."""
-    try:
-        inv, _account_id = load_inventory_with_fallback(inv_path, refresh=refresh)
-        if refresh:
-            print(f"  Saved to {inv_path}", file=sys.stderr)
-    except (SystemExit, Exception) as e:
-        print(f"  Live fetch failed: {e}", file=sys.stderr)
-        sys.exit(1)
+    inv, _account_id = load_inventory_with_fallback(inv_path, refresh=refresh)
+    if refresh:
+        print(f"  Saved to {inv_path}", file=sys.stderr)
     return build_owned(inv, raw.get("recipes", {})), inv
 
 
@@ -257,28 +246,3 @@ def main(args) -> None:
     _aggregate_and_print(
         all_requirements, all_craftables, recipes_by_result, items_by_un, owned, loc_dict
     )  # noqa: E501
-
-
-if __name__ == "__main__":
-    import argparse
-
-    _parser = argparse.ArgumentParser(description="Warframe Crafting Tree Browser")
-    _parser.add_argument("items", nargs="*", help="Item name(s) to look up")
-    _parser.add_argument("--inventory", "-i", help="Path to inventory file")
-    _parser.add_argument(
-        "--refresh", "-r", action="store_true", help="Refresh inventory from live data"
-    )
-    _parser.add_argument(
-        "--items-cache",
-        default=os.path.join(DATA_DIR, "export_db.json"),
-        help="Path to the merged items export database",
-    )
-    _parser.add_argument("--depth", type=int, default=99, help="Max recursion depth for expansion")
-    _parser.add_argument(
-        "--select", type=int, default=None, help="Select match index when multiple"
-    )
-    _parser.add_argument("--interactive", action="store_true", help="Interactive item selection")
-    _parser.add_argument(
-        "--weapon-chain", action="store_true", help="Analyze all weapon upgrade chains"
-    )
-    main(_parser.parse_args())

@@ -10,8 +10,6 @@ Flow:
     3. Write it to ``data/warframe-foundry.json`` (or ``--output``).
 """
 
-import argparse
-import json
 import os
 
 from warframe_profile import DATA_DIR
@@ -22,6 +20,7 @@ from warframe_profile.model.foundry_export import (
     steel_settings_from_xp,
 )
 from warframe_profile.model.inventory import load_data
+from warframe_profile.model.utils import atomic_write_json
 
 #: Default output path for the Foundry import file.
 DEFAULT_OUTPUT = os.path.join(DATA_DIR, "warframe-foundry.json")
@@ -56,7 +55,7 @@ def _settings_from_args(args) -> dict:
 
 def main(args) -> None:
     """Entry point for the ``foundry`` sub-command."""
-    db, inv = load_data(
+    db, inv, _account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,
@@ -66,9 +65,7 @@ def main(args) -> None:
     export = build_foundry_export(db, inv, settings=_settings_from_args(args))
     out_path = getattr(args, "output", None) or DEFAULT_OUTPUT
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(export, f, indent=2)
+        atomic_write_json(out_path, export, indent=2)
     except OSError as exc:
         raise SystemExit(f"error: could not write foundry export {out_path}: {exc}") from exc
 
@@ -106,50 +103,3 @@ def main(args) -> None:
         "  Tip: Steel Path isn't in the inventory export — pass --steel-xp "
         "<xp> (your Steel Path mastery gained)."
     )
-
-
-if __name__ == "__main__":
-    import sys
-
-    from warframe_profile.model.inventory import (
-        InventoryFetchError,
-        ItemCacheNotFoundError,
-        WarframeNotRunningError,
-    )
-
-    parser = argparse.ArgumentParser(description="Export inventory for Warframe Foundry")
-    parser.add_argument("--inventory", "-i", help="Path to cached inventory.json")
-    parser.add_argument("--refresh", "-r", action="store_true", help="Fetch live inventory")
-    parser.add_argument(
-        "--items-cache",
-        default=os.path.join(DATA_DIR, "export_db.json"),
-        help="Path to the merged items export database",
-    )
-    parser.add_argument(
-        "--refresh-items", action="store_true", help="Delete and re-load the items cache"
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        default=DEFAULT_OUTPUT,
-        help="Output path for the Foundry import file",
-    )
-    for arg, field in _SETTINGS_ARG_TO_FIELD.items():
-        parser.add_argument(
-            f"--{arg.replace('_', '-')}",
-            type=int,
-            default=None,
-            help=f"Override the Foundry '{field}' count",
-        )
-    parser.add_argument(
-        "--steel-xp",
-        type=int,
-        default=None,
-        help="Total Steel Path mastery XP gained; converted to steel mission/junction counts",
-    )
-    args = parser.parse_args()
-    try:
-        main(args)
-    except (ItemCacheNotFoundError, InventoryFetchError, WarframeNotRunningError) as e:
-        print(f"  Error: {e}", file=sys.stderr)
-        sys.exit(1)

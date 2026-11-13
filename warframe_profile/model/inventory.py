@@ -36,16 +36,15 @@ from warframe_profile.model.errors import (
     InventoryFetchError,
     ItemCacheNotFoundError,
     ProfileNotFoundError,
-    WarframeNotRunningError,
 )
 from warframe_profile.model.scanner import find_in_memory, find_warframe_pid
-from warframe_profile.model.utils import normalize_path
+from warframe_profile.model.utils import atomic_write_json, normalize_path
 
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
 INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={}&ct=STM"
 
 #: DE profile viewing API endpoint.  Format with ``playerId``.
-PROFILE_URL = "http://content.warframe.com/dynamic/getProfileViewingData.php?playerId={}"
+PROFILE_URL = "https://content.warframe.com/dynamic/getProfileViewingData.php?playerId={}"
 
 #: Regex for extracting accountId and nonce from the Warframe process URL.
 _CREDENTIAL_RE = re.compile(r"accountId=([a-z0-9]+)&nonce=(\d+)")
@@ -94,15 +93,19 @@ def fetch_json(url: str) -> dict | list:
     """Download *url* and deserialise the JSON response.
 
     Raises:
-        InventoryFetchError: on HTTP or network errors.
+        InventoryFetchError: on HTTP, network, or decoding errors.
     """
     try:
         with urllib.request.urlopen(url, timeout=HTTP_TIMEOUT) as r:
-            return json.loads(r.read())
+            payload = r.read()
     except urllib.error.HTTPError as e:
         raise InventoryFetchError(f"HTTP {e.code} fetching {url}") from e
-    except Exception as e:
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
         raise InventoryFetchError(f"Error fetching {url}: {e}") from e
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as e:
+        raise InventoryFetchError(f"Invalid JSON from {url}: {e}") from e
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +123,10 @@ class ExportDB:
 
     Sub-sections (``items``, ``recipes``, ``locale``, ``raw``) are accessed
     via properties so that callers never touch the raw JSON directly.
+
+    The ``_foundry_*`` memo slots are populated lazily by
+    :mod:`warframe_profile.model.foundry_export`; they live here so a single
+    instance is shared between the CLI and the web server.
     """
 
     def __init__(self, path: str) -> None:
@@ -147,12 +154,33 @@ class ExportDB:
         if not self._path or not os.path.exists(self._path):
             self._download_missing_cache()
         try:
-            with open(self._path, encoding="utf-8") as f:
-                self._data = json.load(f)
+            self._data = self._read()
         except (OSError, json.JSONDecodeError) as exc:
-            raise ItemCacheNotFoundError(
-                f"Could not read item cache at {self._path}: {exc}. Run update first."
-            ) from exc
+            # A truncated/corrupt cache (e.g. from an interrupted write or an
+            # older version) is not recoverable by the user without manual
+            # cleanup.  Move it aside and fetch a fresh copy once.
+            corrupt_path = f"{self._path}.corrupt"
+            try:
+                os.replace(self._path, corrupt_path)
+            except OSError:
+                pass
+            print(
+                f"warning: item cache at {self._path} is unreadable ({exc}); "
+                f"re-downloading (old copy kept at {corrupt_path}) ...",
+                file=sys.stderr,
+            )
+            self._download_missing_cache()
+            try:
+                self._data = self._read()
+            except (OSError, json.JSONDecodeError) as retry_exc:
+                raise ItemCacheNotFoundError(
+                    f"Could not read item cache at {self._path}: {retry_exc}. Run update first."
+                ) from retry_exc
+
+    def _read(self) -> dict:
+        """Open and decode the database file (no existence checks)."""
+        with open(self._path, encoding="utf-8") as f:
+            return json.load(f)
 
     def _download_missing_cache(self) -> None:
         """Run the ``update`` command to create a missing export database."""
@@ -298,8 +326,13 @@ def fetch_inventory() -> tuple[dict, str]:
         inv_url,
         headers={"User-Agent": USER_AGENT_DE},
     )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-        data = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            data = r.read()
+    except urllib.error.HTTPError as exc:
+        raise InventoryFetchError(f"HTTP {exc.code} fetching live inventory") from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise InventoryFetchError(f"Could not fetch live inventory: {exc}") from exc
     try:
         return json.loads(data), account_id
     except json.JSONDecodeError as exc:
@@ -407,7 +440,7 @@ def build_mastered_set(inv: dict) -> set[str]:
 
     # Source 1: XPInfo from profile (mastered-and-sold items).
     for entry in inv.get("XPInfo") or []:
-        path = (entry.get("ItemType") or "").lower()
+        path = normalize_path(entry.get("ItemType") or "")
         if path:
             leveled.add(path)
 
@@ -419,7 +452,7 @@ def build_mastered_set(inv: dict) -> set[str]:
     def _walk(obj):
         if isinstance(obj, dict):
             if "ItemType" in obj and obj.get("XP"):
-                leveled.add(obj["ItemType"].lower())
+                leveled.add(normalize_path(obj["ItemType"]))
             for v in obj.values():
                 _walk(v)
         elif isinstance(obj, list):
@@ -550,10 +583,7 @@ def load_inventory_with_fallback(
     if refresh or not os.path.exists(inv_path):
         inv, account_id = fetch_inventory()
         try:
-            parent = os.path.dirname(os.path.abspath(inv_path))
-            os.makedirs(parent, exist_ok=True)
-            with open(inv_path, "w", encoding="utf-8") as f:
-                json.dump(inv, f, indent=2)
+            atomic_write_json(inv_path, inv, indent=2)
         except OSError as exc:
             print(f"warning: could not save inventory cache {inv_path}: {exc}", file=sys.stderr)
         misc, rec, equip = inventory_summary(inv)
@@ -570,37 +600,35 @@ def load_data(
     refresh_items: bool = False,
     inventory_path: str | None = None,
     refresh: bool = False,
-) -> tuple[ExportDB, dict]:
+) -> tuple[ExportDB, dict, str | None]:
     """Load the export database and inventory in one call.
 
     Convenience wrapper shared by the ``ducats`` / ``relics`` /
-    ``cleanup`` entry points.  Exits the process on error.
+    ``cleanup`` entry points.
 
     This is the standard "init" pattern for most sub-commands:
     1. Create ExportDB and load items.
     2. Load inventory (live or cached).
-    3. Return both.
+    3. Return both plus the live account id (``None`` for cached data).
+
+    Raises:
+        ItemCacheNotFoundError: if the item database cannot be loaded.
+        InventoryFetchError: if the inventory cannot be fetched or read.
+        WarframeNotRunningError: if a live scan was requested and the game
+            is not running.
 
     Returns:
-        ``(ExportDB, inventory_dict)``.
+        ``(ExportDB, inventory_dict, account_id_or_None)``.
     """
     from warframe_profile import DATA_DIR
 
     db = ExportDB(items_cache)
-    try:
-        db.load(refresh=refresh_items)
-    except ItemCacheNotFoundError as e:
-        print(f"  Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    db.load(refresh=refresh_items)
 
     inv_path = inventory_path or os.path.join(DATA_DIR, "inventory.json")
-    try:
-        inv, _account_id = load_inventory_with_fallback(
-            inv_path,
-            refresh=refresh or (not inventory_path and not os.path.exists(inv_path)),
-        )
-    except (WarframeNotRunningError, InventoryFetchError) as e:
-        print(f"  Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    inv, account_id = load_inventory_with_fallback(
+        inv_path,
+        refresh=refresh or (not inventory_path and not os.path.exists(inv_path)),
+    )
 
-    return db, inv
+    return db, inv, account_id

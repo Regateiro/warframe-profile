@@ -21,10 +21,14 @@ Merge algorithm (see :func:`merge`):
 import json
 import os
 import sys
+import time
+import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import load_inventory_with_fallback
+from warframe_profile.model.utils import atomic_write_json
 
 #: Base URL for Digital Extremes' public export files.
 DE_BASE = "https://browse.wf/warframe-public-export-plus/"
@@ -105,6 +109,11 @@ WFCD_FIELDS = [
 # ---------------------------------------------------------------------------
 
 
+#: Number of concurrent download workers.  The update is network-bound and
+#: downloads ~35 files, so a small pool cuts wall time substantially.
+MAX_WORKERS = 8
+
+
 def download_json(url: str) -> dict | list:
     """Download a JSON file from *url* and deserialise it."""
     req = urllib.request.Request(
@@ -121,11 +130,38 @@ def download_json(url: str) -> dict | list:
         raise ValueError(f"Invalid JSON from {url}: {exc}") from exc
 
 
+def download_json_with_retry(url: str, attempts: int = 3, backoff: float = 1.5):
+    """Download *url*, retrying transient failures with a short backoff.
+
+    A single flaky response previously aborted the whole update after it had
+    already downloaded most of the data, so retries are worth the extra code.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return download_json(url)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            last_exc = exc
+            if attempt == attempts:
+                break
+            delay = backoff ** (attempt - 1)
+            print(
+                f"  warning: {url} failed ({exc}); retrying in {delay:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    assert last_exc is not None  # the loop always runs at least once
+    raise last_exc
+
+
 def download_wfcd_items() -> list[dict]:
     """Download every WFCD category file and concatenate them into one list."""
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        # ``map`` preserves WFCD_FILES order, keeping the merge deterministic.
+        results = list(pool.map(download_json_with_retry, (WFCD_BASE + f for f in WFCD_FILES)))
+
     items: list[dict] = []
-    for fname in WFCD_FILES:
-        data = download_json(WFCD_BASE + fname)
+    for data in results:
         if isinstance(data, list):
             items.extend(data)
         elif isinstance(data, dict):
@@ -361,13 +397,18 @@ def main(args=None) -> None:
             except OSError as exc:
                 print(f"warning: could not remove {out_path}: {exc}", file=sys.stderr)
 
-    # Download DE export files.
-    for fname, label in DE_FILES.items():
-        url = DE_BASE + fname
-        print(f"Downloading {url} ...", file=sys.stderr)
-        combined[label] = download_json(url)
-        count = len(combined[label]) if isinstance(combined[label], dict) else len(combined[label])
-        print(f"  {count} items", file=sys.stderr)
+    # Download DE export files concurrently (the update is network-bound).
+    print(f"Downloading {len(DE_FILES)} DE export files ...", file=sys.stderr)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        future_to_label = {
+            pool.submit(download_json_with_retry, DE_BASE + fname): label
+            for fname, label in DE_FILES.items()
+        }
+        for future in as_completed(future_to_label):
+            label = future_to_label[future]
+            combined[label] = future.result()
+            count = len(combined[label])
+            print(f"  {label}: {count} entries", file=sys.stderr)
 
     # Download WFCD items.
     print("Downloading WFCD items ...", file=sys.stderr)
@@ -378,13 +419,9 @@ def main(args=None) -> None:
     print("Merging...", file=sys.stderr)
     merged = merge(combined, wfcd)
 
-    # Write output (ensure the parent data directory exists first).
+    # Write output atomically so an interrupt cannot truncate the cache.
     try:
-        out_dir = os.path.dirname(out_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(merged, f, separators=(",", ":"))
+        atomic_write_json(out_path, merged, separators=(",", ":"))
     except OSError as e:
         print(f"  Error: could not write {out_path}: {e}", file=sys.stderr)
         sys.exit(1)

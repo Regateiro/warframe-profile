@@ -491,7 +491,7 @@ def print_missing_mods_report(report: ModsReport) -> None:
 
 def main(args) -> None:
     """Entry point for the ``mods`` sub-command."""
-    db, inv = load_data(
+    db, inv, _account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,

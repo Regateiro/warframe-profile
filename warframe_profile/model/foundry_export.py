@@ -467,6 +467,16 @@ def build_foundry_export(db: ExportDB, inventory: dict, settings: dict | None = 
             path = normalize_path(un)
             max_xp[path] = max(max_xp.get(path, 0), xp.get("XP") or 0)
 
+    # Equipment entries also carry their current XP.  Include them so cached
+    # inventories that were saved without the profile ``XPInfo`` section still
+    # detect mastered items.
+    for section in EQUIPMENT_SECTIONS:
+        for eq in inventory.get(section, []):
+            un = eq.get("ItemType", "")
+            if un:
+                path = normalize_path(un)
+                max_xp[path] = max(max_xp.get(path, 0), eq.get("XP") or 0)
+
     def _mastered(un: str) -> bool:
         item = db_by_un.get(un)
         return max_xp.get(normalize_path(un), 0) >= mastery_xp_threshold(un, item)

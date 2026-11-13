@@ -11,16 +11,16 @@ import time
 import urllib.request
 from typing import Any
 
-from warframe_profile import HTTP_TIMEOUT, USER_AGENT_COMMUNITY
+from warframe_profile import DATA_DIR, HTTP_TIMEOUT, USER_AGENT_COMMUNITY
+from warframe_profile.model.utils import atomic_write_json
 
 #: URL for mod location data from WFCD drop data repository.
 MOD_LOCATIONS_URL = (
     "https://raw.githubusercontent.com/WFCD/warframe-drop-data/main/data/modLocations.json"
 )
 
-#: Local cache path.
-_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
-_CACHE_PATH = os.path.join(_CACHE_DIR, "mod_drop_locations.json")
+#: Local cache path, in the same per-user directory as the other caches.
+_CACHE_PATH = os.path.join(DATA_DIR, "mod_drop_locations.json")
 
 
 #: Module-level memo of the parsed lookup, keyed by ``(cache_mtime, force)``.
@@ -80,24 +80,27 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # nosemgrep
             raw = json.loads(resp.read().decode())
 
-        # Cache to disk
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(raw, f)
+        # Cache to disk (a failed write must not discard the fresh data).
+        try:
+            atomic_write_json(cache_path, raw)
+            _memo = (os.path.getmtime(cache_path), False)
+        except OSError as exc:
+            print(f"Warning: could not cache mod drop data: {exc}", file=sys.stderr)
+            _memo = None
 
-        _memo = (os.path.getmtime(cache_path), False)
         _memo_value = _build_lookup(raw)
         return _memo_value
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Warning: could not fetch mod drop data: {exc}", file=sys.stderr)
-        # Try stale cache
-        if os.path.exists(cache_path):
+        # Try stale cache (which may itself be corrupt).
+        try:
             with open(cache_path, encoding="utf-8") as f:
                 data = json.load(f)
-            _memo = (cache_mtime, False)
-            _memo_value = _build_lookup(data)
-            return _memo_value
-        return {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+        _memo = (cache_mtime, False)
+        _memo_value = _build_lookup(data)
+        return _memo_value
 
 
 def _build_lookup(raw: dict) -> dict[str, list[dict[str, Any]]]:

@@ -1,0 +1,137 @@
+"""Tests for web-server helpers and HTML escaping."""
+
+from types import SimpleNamespace
+
+from warframe_profile.model.analysis import (
+    AnalysisResult,
+    ItemResult,
+    MissingPrime,
+    PartAnalysis,
+)
+from warframe_profile.presenter.web_server import (
+    _display_host,
+    _is_loopback,
+    _is_same_origin_request,
+    _parse_host,
+)
+from warframe_profile.view.web.templates import (
+    _esc,
+    _item_row,
+    render_cleanup_rebuy,
+    render_ducats_missing,
+    render_relics_safe,
+)
+
+
+def test_parse_host_defaults_to_loopback(monkeypatch):
+    monkeypatch.delenv("WARFRAME_WEB_HOST", raising=False)
+    assert _parse_host() == "127.0.0.1"
+
+
+def test_parse_host_honours_env_override(monkeypatch):
+    monkeypatch.setenv("WARFRAME_WEB_HOST", "0.0.0.0")
+    assert _parse_host() == "0.0.0.0"
+
+
+def test_display_host_maps_wildcards_to_localhost():
+    assert _display_host("0.0.0.0") == "localhost"
+    assert _display_host("::") == "localhost"
+    assert _display_host("192.168.1.10") == "192.168.1.10"
+
+
+def test_is_loopback():
+    assert _is_loopback("127.0.0.1")
+    assert _is_loopback("localhost")
+    assert _is_loopback("::1")
+    assert not _is_loopback("0.0.0.0")
+    assert not _is_loopback("192.168.1.10")
+
+
+def test_same_origin_allows_missing_headers():
+    # Scripted clients (curl) send neither Origin nor Referer.
+    assert _is_same_origin_request("", "", "127.0.0.1:8090")
+
+
+def test_same_origin_accepts_matching_origin_and_referer():
+    assert _is_same_origin_request("http://127.0.0.1:8090", "", "127.0.0.1:8090")
+    assert _is_same_origin_request("", "http://127.0.0.1:8090/ducats", "127.0.0.1:8090")
+
+
+def test_same_origin_rejects_cross_origin_requests():
+    assert not _is_same_origin_request("http://evil.example", "", "127.0.0.1:8090")
+    assert not _is_same_origin_request("", "http://evil.example/x", "127.0.0.1:8090")
+    assert not _is_same_origin_request("null", "", "127.0.0.1:8090")
+
+
+def test_esc_escapes_markup():
+    assert _esc("<script>&") == "&lt;script&gt;&amp;"
+
+
+def test_render_ducats_missing_escapes_names():
+    data = AnalysisResult(
+        missing=[
+            MissingPrime(name="<script>alert(1)</script>", category="<b>Cat</b>", mastery_req=0)
+        ]
+    )
+
+    page = render_ducats_missing(data)
+
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+    assert "&lt;b&gt;Cat&lt;/b&gt;" in page
+
+
+def test_item_row_escapes_item_and_part_names():
+    item = ItemResult(
+        name="Lato Prime <b>X</b>",
+        category="Secondary",
+        status="partial",
+        needed_builds=1,
+        extra_builds=0,
+        mastery_req=0,
+        has_copy=False,
+        parts=[
+            PartAnalysis(
+                name="Lato Prime <i>Barrel</i>",
+                owned=2,
+                needed=1,
+                surplus=1,
+                missing=0,
+                ducats=15,
+            )
+        ],
+        can_build=False,
+        missing_parts=0,
+        total_parts=1,
+    )
+
+    row = _item_row(item)
+
+    assert "Lato Prime &lt;b&gt;X&lt;/b&gt;" in row
+    assert "Lato Prime &lt;i&gt;Barrel&lt;/i&gt;" in row
+    assert "<i>Barrel</i>" not in row
+
+
+def test_render_relics_safe_escapes_relic_names():
+    relic = SimpleNamespace(
+        name="<script>x</script>", tier="Axi", count=1, vaulted=False, safe=True
+    )
+
+    page = render_relics_safe([], [relic])
+
+    assert "<script>x</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_render_cleanup_rebuy_escapes_equipment_names():
+    equipment = SimpleNamespace(
+        name="<b>Braton</b>",
+        category="Primary",
+        buy_type="direct",
+        rare_component=None,
+    )
+
+    page = render_cleanup_rebuy([equipment], [], {}, {})
+
+    assert "<b>Braton</b>" not in page
+    assert "&lt;b&gt;Braton&lt;/b&gt;" in page

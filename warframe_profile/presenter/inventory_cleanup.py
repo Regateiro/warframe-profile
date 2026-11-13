@@ -47,7 +47,7 @@ def main(args) -> None:
            leads to an already-owned item).
         6. Print all three sections.
     """
-    db, inv = load_data(
+    db, inv, _account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,
@@ -99,25 +99,3 @@ def main(args) -> None:
         mastered=mastered,
     )
     section_excess_blueprints_components(excess)
-
-
-if __name__ == "__main__":
-    import argparse
-    import os
-
-    from warframe_profile import DATA_DIR
-
-    _parser = argparse.ArgumentParser(description="Warframe Inventory Cleanup")
-    _parser.add_argument("--inventory", "-i", help="Path to cached inventory.json")
-    _parser.add_argument(
-        "--refresh", "-r", action="store_true", help="Fetch inventory from live Warframe process"
-    )
-    _parser.add_argument(
-        "--items-cache",
-        default=os.path.join(DATA_DIR, "export_db.json"),
-        help="Path to the merged items export database",
-    )
-    _parser.add_argument(
-        "--refresh-items", action="store_true", help="Delete and re-load the items cache"
-    )
-    main(_parser.parse_args())

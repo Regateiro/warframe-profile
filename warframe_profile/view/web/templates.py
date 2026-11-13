@@ -39,6 +39,17 @@ YELLOW = "#f1c40f"
 DIM = "#7f8c8d"
 
 
+def _esc(value: object) -> str:
+    """Escape game-derived text before interpolating it into HTML.
+
+    Item, part, and recipe names come from the DE/WFCD datasets rather than
+    from user input, but they are still external data and may contain
+    characters (``&``, ``<``) that would break markup.  Escaping every value
+    keeps the view consistent with :func:`render_mods`.
+    """
+    return html.escape(str(value), quote=False)
+
+
 #: Shared stylesheet for all pages (GitHub-dark theme), built once at import.
 _PAGE_STYLES = f"""<style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -340,7 +351,7 @@ def _tree_component_html(
     consumed[comp_un_lower] += label_mult
 
     cls = _craft_color(comp_owned_qty, label_mult)
-    parts = [f'<div class="tree-item"><span class="{cls}">{label}</span></div>']
+    parts = [f'<div class="tree-item"><span class="{cls}">{_esc(label)}</span></div>']
 
     expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
         comp_owned_qty >= label_mult
@@ -433,7 +444,7 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
     craft_list = [c for c in craft_list if c["quantity"] > c["owned"]]
     if craft_list:
         rows = "".join(
-            f"<tr><td>{c['name']}</td>"
+            f"<tr><td>{_esc(c['name'])}</td>"
             f'<td class="num">{c["quantity"]}</td>'
             f'<td class="num">{c["owned"]}</td>'
             f'<td class="num">{c["num_crafts"]}</td></tr>'
@@ -444,7 +455,7 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 <th class='num'>Crafts</th></tr></thead><tbody>{rows}</tbody></table>""")
 
     mat_rows = "".join(
-        f"<tr><td>{info['name']}</td>"
+        f"<tr><td>{_esc(info['name'])}</td>"
         f'<td class="num">{info["quantity"]}</td>'
         f'<td class="num">{info["owned"]}</td>'
         f'<td class="num">{_status_tag(info["owned"], info["quantity"])}</td></tr>'
@@ -467,7 +478,7 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
     ]
     if farm_items:
         fr = "".join(
-            f"<tr><td>{fi['name']}</td>"
+            f"<tr><td>{_esc(fi['name'])}</td>"
             f'<td class="num">{fi["needed"]}</td>'
             f'<td class="num">{fi["owned"]}</td>'
             f'<td class="num red">{fi["missing"]}</td></tr>'
@@ -501,7 +512,7 @@ def render_ducats_missing(data) -> str:
 
     if missing:
         rows = "".join(
-            f"<tr><td>{m.name}</td><td>{m.category}</td>"
+            f"<tr><td>{_esc(m.name)}</td><td>{_esc(m.category)}</td>"
             f'<td class="num">{m.mastery_req or ""}</td></tr>'
             for m in sorted(missing, key=lambda x: (x.category, x.name))
         )
@@ -565,7 +576,7 @@ def render_ducats_sell(data) -> str:
                 sell[key]["ducats"] = p.ducats
     if sell:
         srows = "".join(
-            f"<tr><td>{part_label(item, part)}</td>"
+            f"<tr><td>{_esc(part_label(item, part))}</td>"
             f'<td class="num">x{info["count"]}</td>'
             f'<td class="num">{info["ducats"]}</td>'
             f'<td class="num">{info["count"] * info["ducats"]}</td></tr>'
@@ -589,10 +600,10 @@ def _item_row(i) -> str:
     surplus_str = ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "—"
     excess_duc = sum(p.surplus * p.ducats for p in surplus_parts)
     return (
-        f"<tr><td>{i.name}</td>"
+        f"<tr><td>{_esc(i.name)}</td>"
         f'<td class="num">{i.needed_builds}</td>'
-        f"<td>{missing_str}</td>"
-        f"<td>{surplus_str}</td>"
+        f"<td>{_esc(missing_str)}</td>"
+        f"<td>{_esc(surplus_str)}</td>"
         f'<td class="num">{excess_duc if excess_duc else ""}</td></tr>'
     )
 
@@ -612,10 +623,10 @@ def render_relics_needed(needed, relics) -> str:
 
     if needed:
         rows = "".join(
-            f"<tr><td>{n.part_name}</td><td>{n.item_name}</td>"
+            f"<tr><td>{_esc(n.part_name)}</td><td>{_esc(n.item_name)}</td>"
             f'<td class="num">x{n.missing}</td>'
             f'<td class="num">{n.ducats or ""}</td>'
-            f"<td>{', '.join(f'{name} x{count}' for name, count, _ in n.drops) if n.drops else '—'}</td></tr>"  # noqa: E501
+            f"<td>{_esc(', '.join(f'{name} x{count}' for name, count, _ in n.drops)) if n.drops else '—'}</td></tr>"  # noqa: E501
             for n in needed
         )
         parts.append(f"""<h2>Needed Prime Parts &amp; Relic Drops</h2>
@@ -636,7 +647,7 @@ def render_relics_safe(needed, relics) -> str:
     safe = [r for r in relics if r.safe and r.count > 0]
     if safe:
         rows = "".join(
-            f"<tr><td>{r.name}</td><td>{r.tier}</td>"
+            f"<tr><td>{_esc(r.name)}</td><td>{_esc(r.tier)}</td>"
             f'<td class="num">{r.count}</td>'
             f"<td>{'Yes' if r.vaulted else 'No'}</td></tr>"
             for r in safe
@@ -699,7 +710,7 @@ def render_craft_result(
             req, craft, owned, items_by_un, recipes_by_result, loc_dict
         )
         lines.append(f"""<details>
-<summary style="font-size:1rem">{name} <span class="dim">({cat})</span></summary>
+<summary style="font-size:1rem">{_esc(name)} <span class="dim">({_esc(cat)})</span></summary>
 <div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
     content = f"""
@@ -770,7 +781,7 @@ def render_weapon_chains(
             req, craft, owned, items_by_un, recipes_by_result, loc_dict
         )
         parts.append(f"""<details>
-<summary>{" → ".join(names)}</summary>
+<summary>{_esc(" → ".join(names))}</summary>
 <div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
     parts.append(_craft_summary_html(all_requirements, all_craftables))
@@ -908,8 +919,9 @@ def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> 
 
     if sellable:
         rows = "".join(
-            f"<tr><td>{s.name}</td><td>{s.category}</td>"
-            f"<td>{s.buy_type}</td><td>{s.rare_component or '—'}</td></tr>"
+            f"<tr><td>{_esc(s.name)}</td><td>{_esc(s.category)}</td>"
+            f"<td>{_esc(s.buy_type)}</td>"
+            f"<td>{_esc(s.rare_component) if s.rare_component else '—'}</td></tr>"
             for s in sellable
         )
         parts.append(f"""<h2>Market Re-Buyable Equipment (safe to sell)</h2>
@@ -931,7 +943,7 @@ def render_cleanup_sell(sellable, owned_prime_pairs, items_by_un, loc_dict) -> s
 
     if owned_prime_pairs:
         rows = "".join(
-            f"<tr><td>{name}</td><td>{cat}</td><td>{prime_name}</td></tr>"
+            f"<tr><td>{_esc(name)}</td><td>{_esc(cat)}</td><td>{_esc(prime_name)}</td></tr>"
             for name, cat, prime_name in sorted(owned_prime_pairs, key=lambda x: (x[1], x[0]))
         )
         parts.append(f"""<h2>Items to Sell (Own Prime Variant)</h2>
@@ -951,10 +963,10 @@ def render_cleanup_excess(excess_items) -> str:
 
     if excess_items:
         rows = "".join(
-            f"<tr><td>{e.name}</td><td>{e.item_type}</td>"
+            f"<tr><td>{_esc(e.name)}</td><td>{_esc(e.item_type)}</td>"
             f'<td class="num">{e.owned}</td>'
             f'<td class="num">{e.sell}</td>'
-            f"<td>{e.builds}</td></tr>"
+            f"<td>{_esc(e.builds)}</td></tr>"
             for e in excess_items
         )
         parts.append(f"""<h2>Excess Blueprints &amp; Components</h2>

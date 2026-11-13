@@ -67,6 +67,7 @@ The `Makefile` wraps the common workflows:
 | `make install` | Install into the Poetry virtualenv (dev tools included) |
 | `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
 | `make check` | Lint + format check (CI-friendly) |
+| `make test` | Run the test suite (`pytest`) |
 | `make update` | Refresh the merged game database |
 | `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe-profile` |
 | `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
@@ -101,6 +102,14 @@ Cached databases and exports are stored per user:
 
 Set the `WARFRAME_DATA_DIR` environment variable to override it. The
 directory is created automatically when data is first written.
+
+| File | Description |
+|---|---|
+| `export_db.json` | Merged DE + WFCD item database |
+| `inventory.json` | Cached inventory |
+| `mod_drop_locations.json` | Cached WFCD mod drop table |
+| `warframe-foundry.json` | Generated Foundry import file |
+| `export_db.json.corrupt` | A cache moved aside when it could not be decoded |
 
 ### Single-file executables
 
@@ -154,11 +163,18 @@ Running with no sub-command starts the web UI:
 python warframe.py            # starts the web UI
 python warframe.py serve      # explicit form
 python warframe.py --port 8091
+python warframe.py serve --host 0.0.0.0   # expose on the LAN (see below)
 WARFRAME_WEB_PORT=8091 python warframe.py
+WARFRAME_WEB_HOST=0.0.0.0 python warframe.py
 ```
 
 The default port is **8090** (Steam's `steamwebhelper` commonly occupies
-8080). Every CLI analysis has a matching web tab: ducats, relics, crafting,
+8080). The server binds to **127.0.0.1** by default and is therefore only
+reachable from the same machine. Pass `--host 0.0.0.0` (or set
+`WARFRAME_WEB_HOST`) to expose it on the network; the UI has no
+authentication, so only do that on a trusted network. Opening a matching
+`http://localhost:<port>/` URL is printed at startup.
+ Every CLI analysis has a matching web tab: ducats, relics, crafting,
 weapon chains, mastery progression, missing mods, cleanup, and the Foundry
 export. They use the same model functions and derived state as the CLI —
 including mastered-but-sold items — so both show the same recommendations.
@@ -304,6 +320,8 @@ and adds WFCD-only Prime items not present in the DE export.
 ```
 warframe-profile/
   warframe.py                                # Unified entrypoint
+  tests/                                     # Pytest suite (no network access)
+  .github/workflows/                         # CI (lint + tests) and Windows build
   warframe_profile/
     __init__.py                              # Package init, DATA_DIR
     __main__.py                              # Sub-command dispatcher (craft/ducats/...)

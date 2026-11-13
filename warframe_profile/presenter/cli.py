@@ -12,7 +12,6 @@ Workflow
 """
 
 import argparse
-import os
 import sys
 
 from warframe_profile.model.analysis import (
@@ -50,6 +49,7 @@ def _run(
     db: ExportDB,
     inv: dict,
     show_relics: bool,
+    account_id: str | None = None,
 ) -> None:
     """Shared logic for both ``ducats`` and ``relics``.
 
@@ -66,14 +66,18 @@ def _run(
     prime_map = build_prime_map(items)
     print(f"  {len(prime_map)} prime items", file=sys.stderr)
 
-    # Fetch DE profile for display (non-fatal).
-    try:
-        profile = fetch_de_profile(args.profile)
-        name = profile.get("DisplayName", "").rstrip(chr(0))
-        mr = profile.get("PlayerLevel", "?")
-        print(f"  Player: {name}  MR {mr}", file=sys.stderr)
-    except (ProfileNotFoundError, InventoryFetchError):
-        pass
+    # Fetch DE profile for display (non-fatal).  Prefer an explicit --profile,
+    # otherwise use the account id discovered by the live scan; skip entirely
+    # when the data came from the cache and no id was supplied.
+    profile_id = args.profile or account_id
+    if profile_id:
+        try:
+            profile = fetch_de_profile(profile_id)
+            name = profile.get("DisplayName", "").rstrip(chr(0))
+            mr = profile.get("PlayerLevel", "?")
+            print(f"  Player: {name}  MR {mr}", file=sys.stderr)
+        except (ProfileNotFoundError, InventoryFetchError):
+            pass
 
     # Build mastered set (items ever ranked up, even if sold).
     mastered = build_mastered_set(inv)
@@ -133,52 +137,21 @@ def _run(
 
 def main(args) -> None:
     """Entry point for the ``ducats`` sub-command."""
-    db, inv = load_data(
+    db, inv, account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,
         args.refresh,
     )
-    _run(args, db, inv, show_relics=False)
+    _run(args, db, inv, show_relics=False, account_id=account_id)
 
 
 def relics_main(args) -> None:
     """Entry point for the ``relics`` sub-command."""
-    db, inv = load_data(
+    db, inv, account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,
         args.refresh,
     )
-    _run(args, db, inv, show_relics=True)
-
-
-if __name__ == "__main__":
-    import argparse
-    import os
-
-    from warframe_profile import DATA_DIR, DEFAULT_ACCOUNT_ID
-
-    _parser = argparse.ArgumentParser(description="Warframe Prime Part Analyzer")
-    _parser.add_argument("--inventory", "-i", help="Path to cached inventory.json")
-    _parser.add_argument(
-        "--refresh",
-        "-r",
-        action="store_true",
-        help="Fetch inventory from live Warframe process",
-    )
-    _parser.add_argument(
-        "--profile",
-        "-p",
-        default=DEFAULT_ACCOUNT_ID,
-        help="DE account ID for player display",
-    )
-    _parser.add_argument(
-        "--items-cache",
-        default=os.path.join(DATA_DIR, "export_db.json"),
-        help="Path to the merged items export database",
-    )
-    _parser.add_argument(
-        "--refresh-items", action="store_true", help="Delete and re-load the items cache"
-    )
-    main(_parser.parse_args())
+    _run(args, db, inv, show_relics=True, account_id=account_id)
