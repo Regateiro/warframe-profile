@@ -71,7 +71,7 @@ The `Makefile` wraps the common workflows:
 | `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe-profile` |
 | `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
 | `make uninstall-linux` | Remove the installed Linux executable |
-| `make build-windows` | Cross-build `dist/windows/warframe-profile.exe` through Wine |
+| `make build-windows` | Cross-build and zip the Windows executable through Wine |
 | `make wine-setup` | Install Windows Python + PyInstaller in the Wine prefix |
 | `make clean-build` | Remove `dist/` and `build/` |
 | `make clean-wine` | Remove the Wine build prefix |
@@ -139,10 +139,13 @@ bundled interpreter must be 64-bit for live scanning.
 **Windows (cross-build from Linux)**
 
 ```bash
-make build-windows  # -> dist/windows/warframe-profile.exe
+make build-windows
+# -> dist/windows/warframe-profile.exe
+# -> dist/windows/warframe-profile.zip
 ```
 
-This requires Wine and downloads a 64-bit Windows Python on first use.
+This requires Wine (plus `zip`) and downloads a 64-bit Windows Python on
+first use.
 
 The `.exe` still downloads game data on first use, so run `update`
 once. Its data directory is `%LOCALAPPDATA%\warframe-profile`. The binary

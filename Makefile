@@ -3,7 +3,7 @@
 #   make install        # set up the Poetry virtualenv (dev tools included)
 #   make build-linux    # build dist/linux/warframe-profile (one-file executable)
 #   make install-linux  # build and install it to $(BINDIR) (default ~/.local/bin)
-#   make build-windows  # cross-build dist/windows/warframe-profile.exe via Wine
+#   make build-windows  # cross-build (and zip) dist/windows/warframe-profile.exe via Wine
 #   make run ARGS=ducats
 #   make check
 #   make clean
@@ -122,11 +122,19 @@ wine-setup: ## Install Windows Python + PyInstaller in the Wine prefix (used by 
 			-m pip install --disable-pip-version-check -q .; \
 	fi
 
-build-windows: wine-setup ## Cross-build dist/windows/warframe-profile.exe (requires Wine)
+build-windows: wine-setup ## Cross-build and zip dist/windows/warframe-profile.exe (requires Wine)
 	WINEPREFIX="$(WINEPREFIX)" WINEDEBUG=-all $(WINE) '$(WIN_PYTHON)' \
 		-m PyInstaller --clean --noconfirm \
 		--distpath "$(DIST)/windows" --workpath "$(BUILD)/windows" warframe.spec
-	@printf '\nBuilt %s\n' "$(DIST)/windows/$(BIN_NAME).exe"
+	@command -v zip >/dev/null || { \
+		echo "error: zip not found; install zip to package the Windows executable" >&2; \
+		exit 1; \
+	}
+	@rm -f "$(DIST)/windows/$(BIN_NAME).zip"
+	cd "$(DIST)/windows" && zip -q -9 "$(BIN_NAME).zip" "$(BIN_NAME).exe"
+	@printf '\nBuilt %s\nPackaged %s\n' \
+		"$(DIST)/windows/$(BIN_NAME).exe" \
+		"$(DIST)/windows/$(BIN_NAME).zip"
 
 # ---------------------------------------------------------------------------
 # Cleanup
