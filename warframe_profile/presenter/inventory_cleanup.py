@@ -23,7 +23,6 @@ from warframe_profile.model.analysis import (
 from warframe_profile.model.inventory import (
     EQUIPMENT_SECTIONS,
     build_mastered_set,
-    build_owned,
     load_data,
 )
 from warframe_profile.model.utils import normalize_path
@@ -93,7 +92,6 @@ def main(args) -> None:
         inv,
         items_by_un,
         db.recipes,
-        build_owned(inv),
         owned_finished,
         db.locale,
         mastered=mastered,

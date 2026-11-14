@@ -371,7 +371,6 @@ def _ensure_excess():
         _cache.inventory,
         _cache.items_by_un,
         _require_db().recipes,
-        _cache.owned,
         _cache.owned_finished,
         _cache.loc_dict,
         mastered=_cache.mastered,
@@ -636,12 +635,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             _ensure_analysis()
             self._html(
                 200,
-                render_cleanup_sell(
-                    _cache.sellable,
-                    _cache.owned_prime_pairs,
-                    _cache.items_by_un,
-                    _cache.loc_dict,
-                ),
+                render_cleanup_sell(_cache.owned_prime_pairs),
             )
         elif subpath == "/excess":
             _ensure_excess()
@@ -650,12 +644,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             _ensure_analysis()
             self._html(
                 200,
-                render_cleanup_rebuy(
-                    _cache.sellable,
-                    _cache.owned_prime_pairs,
-                    _cache.items_by_un,
-                    _cache.loc_dict,
-                ),
+                render_cleanup_rebuy(_cache.sellable),
             )
 
     def do_GET(self):

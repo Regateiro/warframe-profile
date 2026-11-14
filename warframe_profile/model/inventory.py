@@ -50,15 +50,6 @@ PROFILE_URL = "https://content.warframe.com/dynamic/getProfileViewingData.php?pl
 _CREDENTIAL_RE = re.compile(r"accountId=([a-z0-9]+)&nonce=(\d+)")
 
 
-#: Inventory section keys for mod data.
-MOD_SECTIONS: tuple[str, ...] = ("RawUpgrades", "Upgrades", "FocusUpgrades")
-
-#: Inventory section keys for miscellaneous items (resources, relics, etc.).
-MISC_ITEMS_SECTION = "MiscItems"
-
-#: Inventory section key for blueprints / recipes.
-RECIPES_SECTION = "Recipes"
-
 #: Inventory sections that contain equipment (weapons, warframes, necramechs,
 #: sentinels, etc.).  These are the top-level keys in the DE inventory API
 #: response that hold owned equipment items.  Used by ``build_owned`` and
@@ -549,23 +540,6 @@ def build_owned(
     return owned
 
 
-def merge_profile_data(inv: dict, profile: dict) -> None:
-    """Merge DE profile viewing data into *inv*.
-
-    Adds/updates:
-    * ``PlayerLevel`` (Mastery Rank).
-    * ``XPInfo`` — the canonical list of every item the player has ever
-      ranked up, including items no longer owned.
-
-    This data is needed by the ``mastery`` sub-command to determine
-    which items have been mastered vs never touched.
-    """
-    inv["PlayerLevel"] = profile.get("PlayerLevel", inv.get("PlayerLevel", 0))
-    xp_info = profile.get("XPInfo", [])
-    if xp_info:
-        inv["XPInfo"] = xp_info
-
-
 def load_inventory_with_fallback(
     inv_path: str,
     refresh: bool = False,
@@ -573,10 +547,8 @@ def load_inventory_with_fallback(
     """Return inventory — either freshly fetched or from the local cache.
 
     When *refresh* is ``True`` (or the cache file is missing) the
-    function fetches live data from the Warframe process, also fetches
-    the DE profile viewing data (for mastery tracking), merges them,
-    saves, and prints a summary to stderr.  Otherwise the cached file
-    is loaded.
+    function fetches live data from the Warframe process, saves it, and
+    prints a summary to stderr.  Otherwise the cached file is loaded.
 
     This is the main inventory loading entry point used by all presenters.
 

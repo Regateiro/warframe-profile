@@ -209,7 +209,7 @@ def get_recipe_components(
 def build_lookup(items_by_un: dict, loc_dict: dict) -> dict:
     """Build a ``name.lower() → [items]`` lookup for text search."""
     by_name: dict = defaultdict(list)
-    for un_lower, item in items_by_un.items():
+    for item in items_by_un.values():
         name = resolve_name(item.get("name", ""), loc_dict)
         if name:
             item["_resolved_name"] = name
@@ -332,7 +332,7 @@ def _leaf_result(
             "quantity": quantity,
             "owned": owned.get(normalize_path(item_un), 0),
         }
-    }, {}  # noqa: E501
+    }, {}
 
 
 def _register_self_craftable(
@@ -424,7 +424,7 @@ def _process_expanded_component(
         depth + 1,
         max_depth,
         parent_name,
-    )  # noqa: E501
+    )
 
 
 def _process_unexpanded_component(
@@ -442,7 +442,7 @@ def _process_unexpanded_component(
     """Add an unexpanded component to craftables or requirements."""
     is_bp = "blueprint" in comp.get("name", "").lower() or is_blueprint_un(
         comp.get("uniqueName", "")
-    )  # noqa: E501
+    )
     is_craftable = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp)
     name = display_name(comp, items_by_un, parent_name, loc_dict)
     comp_owned = owned.get(normalize_path(comp.get("uniqueName", "")), 0)
@@ -456,7 +456,7 @@ def _process_unexpanded_component(
                 "owned": comp_owned,
                 "build_qty": comp_recipe.get("num", 1) or 1,
             }
-        }  # noqa: E501
+        }
     return {comp_un_lower: {"name": name, "quantity": total, "owned": comp_owned}}, {}
 
 
@@ -484,7 +484,7 @@ def resolve_tree(
         get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
-    )  # noqa: E501
+    )
 
     if not item and not components:
         return {}, {}
@@ -507,13 +507,13 @@ def resolve_tree(
         owned_qty = owned.get(norm, 0)
         bp_result, self_craft = _register_self_craftable(
             item_un, quantity, item_name, owned_qty, owned, num_crafts, build_qty, recipe
-        )  # noqa: E501
+        )
         result.update(bp_result)
         craftables.update(self_craft)
 
     effective_crafts = _compute_effective_crafts(
         quantity, build_qty, owned, item_un, depth, num_crafts
-    )  # noqa: E501
+    )
     agg_components = _aggregate_components(components)
 
     for comp_un_lower, comp in agg_components.items():
@@ -527,7 +527,7 @@ def resolve_tree(
         expand = (
             should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp)
             and comp_owned < total
-        )  # noqa: E501
+        )
 
         if expand:
             sub, sub_craft = _process_expanded_component(
@@ -540,7 +540,7 @@ def resolve_tree(
                 depth,
                 max_depth,
                 item_name,
-            )  # noqa: E501
+            )
             _merge_sub_into(result, sub)
             _merge_sub_into(craftables, sub_craft)
         else:
@@ -555,7 +555,7 @@ def resolve_tree(
                 depth,
                 max_depth,
                 item_name,
-            )  # noqa: E501
+            )
             _merge_sub_into(result, sub_req)
             _merge_sub_into(craftables, sub_craft)
 
@@ -617,8 +617,8 @@ def merge_dicts(acc: dict, src: dict, *fields: str) -> None:
 #
 
 
-def compute_crafting_plan(craftables: dict, owned: dict) -> dict:
-    """Compute ``num_crafts`` for each craftable from remaining after owned.
+def compute_crafting_plan(craftables: dict) -> dict:
+    """Compute ``num_crafts`` for each craftable from its remaining quantity.
 
     *craftables* is mutated in place and returned.
     """
@@ -756,7 +756,7 @@ def postprocess_craft_plan(
     *requirements* and *craftables* come from :func:`resolve_tree`;
     *craftables* is mutated in place.  Returns the final requirements dict.
     """
-    compute_crafting_plan(craftables, owned)
+    compute_crafting_plan(craftables)
     processed = decompose_raw_materials(craftables, recipes_by_result, items_by_un, owned, loc_dict)
     processed = preserve_blueprints(requirements, processed)
     for key, value in requirements.items():
@@ -781,7 +781,6 @@ def postprocess_craft_plan(
 
 
 def _build_weapon_graph(
-    items_by_un: dict,
     recipes_by_result: dict,
     weapon_uns: set[str],
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
@@ -845,7 +844,7 @@ def _aggregate_chain_requirements(
 
     req, craft = resolve_tree(
         final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )  # noqa: E501
+    )
     merge_dicts(all_requirements, req, "quantity")
     merge_dicts(all_craftables, craft, "quantity")
 
@@ -881,9 +880,9 @@ def build_weapon_chains(
 
     weapon_uns = {
         un_lower for un_lower, item in items_by_un.items() if categorize(item) in WEAPON_CATEGORIES
-    }  # noqa: E501
+    }
 
-    builds_into, built_from = _build_weapon_graph(items_by_un, recipes_by_result, weapon_uns)
+    builds_into, built_from = _build_weapon_graph(recipes_by_result, weapon_uns)
     chains = _find_chains(weapon_uns, builds_into, built_from)
 
     all_requirements: dict[str, dict] = {}
@@ -906,9 +905,9 @@ def build_weapon_chains(
             all_requirements,
             all_craftables,
             max_depth,
-        )  # noqa: E501
+        )
         shown_chains.append(chain)
 
-    compute_crafting_plan(all_craftables, owned)
+    compute_crafting_plan(all_craftables)
 
     return shown_chains, all_requirements, all_craftables, len(shown_chains)

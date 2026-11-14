@@ -433,7 +433,6 @@ def craft_color_for_owned(owned_qty: int, needed: int) -> str:
 
 
 def _prepare_components_with_bp(
-    item_un_lower: str,
     item_name: str,
     recipe: dict,
     components: list,
@@ -455,15 +454,13 @@ def _compute_print_crafts(
     owned_qty: int,
     build_qty: int,
     depth: int,
-) -> tuple[int, int]:
-    """Return ``(num_crafts, effective_crafts)`` for display."""
+) -> int:
+    """Return the effective number of crafts to display."""
     num_crafts = max(1, math.ceil(quantity / build_qty))
     if depth > 0:
         remaining_qty = max(0, quantity - owned_qty)
-        effective_crafts = max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
-    else:
-        effective_crafts = num_crafts
-    return num_crafts, effective_crafts
+        return max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
+    return num_crafts
 
 
 def _print_component_line(
@@ -508,7 +505,7 @@ def _print_component_line(
 
     expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
         comp_owned_qty >= label_mult
-    )  # noqa: E501
+    )
 
     print(f"{prefix}{connector}{color}{label}{RESET}")
     if expand:
@@ -522,9 +519,7 @@ def _print_component_line(
             depth + 1,
             max_depth,
             child_prefix,
-            item_name,
-            False,
-        )  # noqa: E501
+        )
 
 
 def print_craft_tree(
@@ -537,8 +532,6 @@ def print_craft_tree(
     depth=0,
     max_depth=2,
     prefix="",
-    parent_name=None,
-    parent_satisfied=False,
 ) -> None:
     """Recursively print a colour-coded crafting tree to stdout."""
     item_un_lower = item_un.lower()
@@ -548,7 +541,7 @@ def print_craft_tree(
         get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
-    )  # noqa: E501
+    )
 
     item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
     if not item_name:
@@ -561,14 +554,14 @@ def print_craft_tree(
 
     recipe = recipes_by_result.get(item_un_lower)
     if recipe:
-        components = _prepare_components_with_bp(item_un_lower, item_name, recipe, components)
+        components = _prepare_components_with_bp(item_name, recipe, components)
 
     if not components or not recipe:
         return
 
     build_qty = recipe.get("num", 1) or 1
     consumable = recipe.get("consumeOnUse", True)
-    _num_crafts, effective_crafts = _compute_print_crafts(quantity, owned_qty, build_qty, depth)
+    effective_crafts = _compute_print_crafts(quantity, owned_qty, build_qty, depth)
 
     consumed = defaultdict(int)
     for i, comp in enumerate(components):
@@ -587,7 +580,7 @@ def print_craft_tree(
             loc_dict,
             depth,
             max_depth,
-        )  # noqa: E501
+        )
 
 
 def print_craft_summary(requirements: dict, craftables: dict) -> None:

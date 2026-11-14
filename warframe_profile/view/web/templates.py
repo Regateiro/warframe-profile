@@ -394,7 +394,7 @@ def _tree_component_html(
 
     expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
         comp_owned_qty >= label_mult
-    )  # noqa: E501
+    )
     if expand:
         sub = _tree_html(
             comp_un,
@@ -405,8 +405,7 @@ def _tree_component_html(
             loc_dict,
             depth + 1,
             max_depth,
-            item_name,
-        )  # noqa: E501
+        )
         if sub:
             parts.append(f'<div class="tree">{sub}</div>')
 
@@ -422,7 +421,6 @@ def _tree_html(
     loc_dict: dict,
     depth: int = 0,
     max_depth: int = 2,
-    parent_name: str | None = None,
 ) -> str:
     """Build recursive HTML crafting tree for *item_un* up to *max_depth*."""
     lines: list[str] = []
@@ -433,7 +431,7 @@ def _tree_html(
         get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
         if has_recipe(item_un_lower, recipes_by_result)
         else []
-    )  # noqa: E501
+    )
 
     item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
     if not item_name:
@@ -445,7 +443,7 @@ def _tree_html(
         if bp_key:
             components = [
                 {"uniqueName": bp_key, "name": f"{item_name} Blueprint", "itemCount": 1}
-            ] + components  # noqa: E501
+            ] + components
 
     if not components or not recipe:
         return ""
@@ -470,7 +468,7 @@ def _tree_html(
                 max_depth,
                 item_name,
             )
-        )  # noqa: E501
+        )
 
     return "".join(lines)
 
@@ -587,13 +585,18 @@ def render_relics_needed(needed, category_slug: str) -> str:
     items = [n for n in needed if relic_category_slug(n.category) == category_slug]
     label = items[0].category if items else category_slug
 
+    def _drops_cell(part) -> str:
+        if not part.drops:
+            return "—"
+        return _esc(", ".join(f"{name} x{count}" for name, count, _ in part.drops))
+
     parts = []
     if items:
         rows = "".join(
             f"<tr><td>{_esc(n.part_name)}</td><td>{_esc(n.item_name)}</td>"
             f'<td class="num">x{n.missing}</td>'
             f'<td class="num">{n.ducats or ""}</td>'
-            f"<td>{_esc(', '.join(f'{name} x{count}' for name, count, _ in n.drops)) if n.drops else '—'}</td></tr>"  # noqa: E501
+            f"<td>{_drops_cell(n)}</td></tr>"
             for n in items
         )
         parts.append(f"""<h2>{_esc(label)} &mdash; Needed Prime Parts</h2>
@@ -937,7 +940,7 @@ def render_mods(report) -> str:
 #
 
 
-def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> str:
+def render_cleanup_rebuy(sellable) -> str:
     """Render Cleanup — Re-Buyable sub-view (market-rebuyable equipment safe to sell)."""
     parts = []
 
@@ -949,10 +952,11 @@ def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> 
             for s in sellable
         )
         parts.append(f"""<h2>Market Re-Buyable Equipment (safe to sell)</h2>
-<p class="dim" style="margin:-4px 0 8px;font-size:0.8rem">Includes items that only craft into equipment you already own.</p>
+<p class="dim" style="margin:-4px 0 8px;font-size:0.8rem">
+Includes items that only craft into equipment you already own.</p>
 <table><thead><tr><th>Name</th><th>Category</th><th>Buy Type</th>
 <th>Rarest Material</th></tr></thead>
-<tbody>{rows}</tbody></table>""")  # noqa: E501
+<tbody>{rows}</tbody></table>""")
 
     if not parts:
         parts.append('<p class="green">Nothing to clean up!</p>')
@@ -961,7 +965,7 @@ def render_cleanup_rebuy(sellable, owned_prime_pairs, items_by_un, loc_dict) -> 
     return _page("Cleanup — Re-Buyable", content, "cleanup")
 
 
-def render_cleanup_sell(sellable, owned_prime_pairs, items_by_un, loc_dict) -> str:
+def render_cleanup_sell(owned_prime_pairs) -> str:
     """Render Cleanup — Prime Variant sub-view (non-Prime items with owned Prime)."""
     parts = []
 

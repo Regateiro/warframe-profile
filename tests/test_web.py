@@ -205,7 +205,6 @@ def _sellable_item(
         ],
         can_build=False,
         missing_parts=0,
-        total_parts=1,
     )
 
 
@@ -278,7 +277,6 @@ def test_render_mastery_ready_lists_buildable_primes():
         parts=[],
         can_build=True,
         missing_parts=0,
-        total_parts=2,
     )
 
     page = render_mastery_ready(_mastery_report(), AnalysisResult(items=[item]))
@@ -421,7 +419,7 @@ def test_render_cleanup_rebuy_escapes_equipment_names():
         rare_component=None,
     )
 
-    page = render_cleanup_rebuy([equipment], [], {}, {})
+    page = render_cleanup_rebuy([equipment])
 
     assert "<b>Braton</b>" not in page
     assert "&lt;b&gt;Braton&lt;/b&gt;" in page

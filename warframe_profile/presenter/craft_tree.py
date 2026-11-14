@@ -96,7 +96,7 @@ def _run_weapon_chain_mode(
         print()
         print_craft_tree(
             final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, depth=0, max_depth=5
-        )  # noqa: E501
+        )
         print()
 
     if shown == 0:
@@ -160,12 +160,12 @@ def _process_item(
 
     print_craft_tree(
         item_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )  # noqa: E501
+    )
     print()
 
     req, craft = resolve_tree(
         item_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )  # noqa: E501
+    )
 
     add_missing_blueprint_requirement(item_un, item_name, req, owned, recipes_by_result)
 
@@ -245,4 +245,4 @@ def main(args) -> None:
 
     _aggregate_and_print(
         all_requirements, all_craftables, recipes_by_result, items_by_un, owned, loc_dict
-    )  # noqa: E501
+    )

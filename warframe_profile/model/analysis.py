@@ -133,7 +133,6 @@ class ItemResult:
         can_build:   ``True`` when no parts are missing (including sub-craft
                      ingredients).
         missing_parts: Total count of missing part copies.
-        total_parts: Number of distinct component types.
     """
 
     name: str
@@ -146,7 +145,6 @@ class ItemResult:
     parts: list[PartAnalysis]
     can_build: bool
     missing_parts: int
-    total_parts: int
 
 
 @dataclass
@@ -189,15 +187,13 @@ class ExcessItem:
         name:     Display name.
         item_type: ``"Blueprint"`` or ``"Component"``.
         owned:    Total copies owned.
-        keep:     Number that are useful (craft into unowned items).
-        sell:     Number that can be safely sold (``owned - keep``).
+        sell:     Number that can be safely sold.
         builds:   What finished item(s) this crafts into.
     """
 
     name: str
     item_type: str
     owned: int
-    keep: int
     sell: int
     builds: str
 
@@ -301,7 +297,6 @@ def compute_extra_builds(
 
 def _compute_needed_builds(
     item_un: str,
-    prime_map: dict[str, dict],
     owned_finished: set[str],
     extra_builds: dict[str, int],
 ) -> int:
@@ -330,23 +325,8 @@ def _compute_needed_builds(
 #   2. For each owned relic, check each reward against this set.
 #   3. If all prime-part rewards are not needed → relic is "safe".
 #
-# Dataclasses: RelicReward, RelicInfo, NeededPart
+# Dataclasses: RelicInfo, NeededPart
 # Entry points: build_relics_map(), build_needed_drops()
-
-
-@dataclass
-class RelicReward:
-    """A single reward entry within a relic's drop table.
-
-    Attributes:
-        part_name: Human-readable name of the reward.
-        rarity:    Rarity tier ("Intact", "Uncommon", "Rare").
-        owned:     Whether the player owns at least one copy of this part.
-    """
-
-    part_name: str
-    rarity: str
-    owned: bool
 
 
 @dataclass
@@ -358,18 +338,14 @@ class RelicInfo:
         tier:      Relic tier (Lith / Meso / Neo / Axi).
         count:     Number of copies owned.
         vaulted:   Whether the relic is vaulted.
-        rewards:   List of :class:`RelicReward` for each drop.
         safe:      True when *every* prime-part reward is already owned.
-        unowned:   Names of rewards not yet owned (empty when *safe*).
     """
 
     name: str
     tier: str
     count: int
     vaulted: bool
-    rewards: list[RelicReward]
     safe: bool
-    unowned: list[str]
 
 
 #: Component names that are NOT component-level items — they are either the
@@ -448,10 +424,7 @@ def _shorten_name(full_name: str) -> str:
     return full_name
 
 
-def _build_owned_relics(
-    inventory: dict,
-    relic_items: list[dict],
-) -> dict[str, int]:
+def _build_owned_relics(inventory: dict) -> dict[str, int]:
     """Return a ``{relic_uniqueName: count}`` map for relics the player owns.
 
     Only Intact refinement relics are counted (the DE inventory always
@@ -515,7 +488,7 @@ def _build_not_needed_part_names(
 
         item_name = info["name"]
         cat = info["category"]
-        needed_builds = _compute_needed_builds(un, prime_map, owned_finished, extra_builds)
+        needed_builds = _compute_needed_builds(un, owned_finished, extra_builds)
 
         for p in info["parts"]:
             if p["ducats"] == 0:
@@ -570,23 +543,15 @@ def _reward_names_for_part(
 def _process_relic_rewards(
     rewards_raw: list[dict],
     not_needed: set[str],
-) -> tuple[list[RelicReward], bool, list[str]]:
-    """Process relic rewards into ``(reward_list, has_unowned, unowned_names)``."""
-    reward_list: list[RelicReward] = []
-    has_unowned = False
-    unowned_names: list[str] = []
+) -> bool:
+    """Return whether any prime-part reward is still needed."""
     for rw in rewards_raw:
         rname = rw["item"]["name"]
-        rarity = rw["rarity"]
         if rname in _NON_PRIME_REWARDS:
-            safe_flag = True
-        else:
-            safe_flag = rname in not_needed
-            if not safe_flag:
-                has_unowned = True
-                unowned_names.append(rname)
-        reward_list.append(RelicReward(part_name=rname, rarity=rarity, owned=safe_flag))
-    return reward_list, has_unowned, unowned_names
+            continue
+        if rname not in not_needed:
+            return True
+    return False
 
 
 def build_relics_map(
@@ -602,7 +567,7 @@ def build_relics_map(
     """Cross-reference owned relics against needed prime parts."""
     all_relics = [i for i in items if i.get("category") == "Relics"]
     relic_by_un: dict[str, dict] = {r["uniqueName"]: r for r in all_relics}
-    owned_relics = _build_owned_relics(inventory, all_relics)
+    owned_relics = _build_owned_relics(inventory)
     not_needed = _build_not_needed_part_names(
         prime_map,
         inventory,
@@ -611,7 +576,7 @@ def build_relics_map(
         mastered=mastered,
         owned_finished=owned_finished,
         extra_builds=extra_builds,
-    )  # noqa: E501
+    )
 
     results: list[RelicInfo] = []
     for relic_un, relic_count in sorted(owned_relics.items()):
@@ -619,9 +584,7 @@ def build_relics_map(
         if not relic:
             continue
 
-        reward_list, has_unowned, unowned_names = _process_relic_rewards(
-            relic.get("rewards", []), not_needed
-        )  # noqa: E501
+        has_unowned = _process_relic_rewards(relic.get("rewards", []), not_needed)
 
         results.append(
             RelicInfo(
@@ -629,9 +592,7 @@ def build_relics_map(
                 tier=_tier_from_un(relic_un),
                 count=relic_count,
                 vaulted=relic.get("vaulted", False),
-                rewards=reward_list,
                 safe=not has_unowned,
-                unowned=unowned_names,
             )
         )
 
@@ -675,7 +636,7 @@ def _build_reward_index(
     all_relics: list[dict],
 ) -> dict[str, list[tuple[str, int, str]]]:
     """Build mapping: reward_name -> [(relic_short_name, count, tier)]."""
-    owned_relics = _build_owned_relics(inventory, all_relics)
+    owned_relics = _build_owned_relics(inventory)
     relic_by_un: dict[str, dict] = {r["uniqueName"]: r for r in all_relics}
     index: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
     for relic_un, relic_count in owned_relics.items():
@@ -728,7 +689,7 @@ def _process_needed_part(
         missing=missing,
         ducats=p["ducats"],
         drops=part_drops,
-    )  # noqa: E501
+    )
 
 
 def build_needed_drops(
@@ -759,7 +720,7 @@ def build_needed_drops(
     for un, info in prime_map.items():
         if info["is_cosmetic"]:
             continue
-        needed_builds = _compute_needed_builds(un, prime_map, owned_finished, extra_builds)
+        needed_builds = _compute_needed_builds(un, owned_finished, extra_builds)
         for p in info["parts"]:
             np = _process_needed_part(
                 p,
@@ -957,26 +918,23 @@ def _excess_item(
         return None
     if not _all_crafting_paths_lead_to_owned(
         item_un, owned_finished, ingredient_to_results, set(), mastered=mastered
-    ):  # noqa: E501
+    ):
         return None
     item_data = items_by_un.get(normalize_path(item_un))
     name = (
         resolve_name(item_data.get("name", ""), loc_dict) if item_data else item_un.split("/")[-1]
-    )  # noqa: E501
+    )
     results = ingredient_to_results.get(item_un, set())
     builds = (
         ", ".join(_item_display_name(r, items_by_un, loc_dict) for r in results) if results else "?"
-    )  # noqa: E501
-    return ExcessItem(
-        name=name, item_type=item_type, owned=count, keep=0, sell=count, builds=builds
-    )  # noqa: E501
+    )
+    return ExcessItem(name=name, item_type=item_type, owned=count, sell=count, builds=builds)
 
 
 def find_excess_blueprints_and_components(
     inventory: dict,
     items_by_un: dict[str, dict],
     recipes: dict,
-    owned: dict[str, int],
     owned_finished: set[str],
     loc_dict: dict,
     mastered: set[str] | None = None,
@@ -1006,7 +964,7 @@ def find_excess_blueprints_and_components(
                 loc_dict,
                 ingredient_to_results,
                 mastered,
-            )  # noqa: E501
+            )
             if item:
                 excess.append(item)
 
@@ -1022,7 +980,7 @@ def find_excess_blueprints_and_components(
                 loc_dict,
                 ingredient_to_results,
                 mastered,
-            )  # noqa: E501
+            )
             if ex:
                 excess.append(ex)
 
@@ -1514,7 +1472,6 @@ def _make_item_result(
     has_copy: bool,
     can_build: bool,
     missing_parts: int,
-    total_parts: int,
     part_analysis: list[PartAnalysis],
 ) -> ItemResult:
     """Construct an :class:`ItemResult` with common boilerplate."""
@@ -1529,7 +1486,6 @@ def _make_item_result(
         parts=part_analysis,
         can_build=can_build,
         missing_parts=missing_parts,
-        total_parts=total_parts,
     )
 
 
@@ -1565,20 +1521,18 @@ def _classify_prime_item(
             False,
             False,
             0,
-            len(info["parts"]),
             [],
         ), None
 
     part_analysis, missing_parts = _analyze_parts(
         info, prime_map, needed_builds, owned, owned_finished, comp_to_bp=comp_to_bp
-    )  # noqa: E501
+    )
     subcraft_parts, subcraft_missing = _analyze_subcraft_parts(
         info, prime_map, needed_builds, owned
     )
     if subcraft_parts:
         part_analysis.extend(subcraft_parts)
         missing_parts += subcraft_missing
-    total_parts = len(info["parts"]) + len(subcraft_parts)
 
     if has_copy:
         return _make_item_result(
@@ -1591,9 +1545,8 @@ def _classify_prime_item(
             True,
             missing_parts == 0,
             missing_parts,
-            total_parts,
             part_analysis,
-        ), None  # noqa: E501
+        ), None
     elif missing_parts == 0 and info["parts"]:
         return _make_item_result(
             name,
@@ -1605,9 +1558,8 @@ def _classify_prime_item(
             False,
             True,
             0,
-            total_parts,
             part_analysis,
-        ), None  # noqa: E501
+        ), None
     elif any(p.owned > 0 for p in part_analysis):
         return _make_item_result(
             name,
@@ -1619,9 +1571,8 @@ def _classify_prime_item(
             False,
             missing_parts == 0,
             missing_parts,
-            total_parts,
             part_analysis,
-        ), None  # noqa: E501
+        ), None
     elif info["masterable"]:
         return None, MissingPrime(name=name, category=cat, mastery_req=info["masteryReq"])
 
@@ -1689,7 +1640,7 @@ def analyze(
             prime_map,
             comp_to_bp=comp_to_bp,
             pending=pending,
-        )  # noqa: E501
+        )
 
         if item_result:
             results.append(item_result)

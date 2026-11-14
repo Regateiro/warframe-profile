@@ -300,11 +300,11 @@ def _acquisition_hint(
 def analyze_missing_mods(
     db: ExportDB,
     inv: dict,
-) -> tuple[dict[str, int], dict[str, list[dict]], dict[str, int], int, dict[str, list[dict]]]:
+) -> tuple[dict[str, int], dict[str, list[dict]], dict[str, int], dict[str, list[dict]]]:
     """Analyze which mods the player is missing.
 
     Returns:
-        ``(owned_mods, missing_by_category, owned_by_category, total_game_mods, drop_data)``
+        ``(owned_mods, missing_by_category, owned_by_category, drop_data)``
         where *missing_by_category* maps in-game category → list of missing
         mod dicts, *owned_by_category* maps category → count owned,
         *owned_mods* maps normalised path → quantity, and *drop_data*
@@ -365,7 +365,7 @@ def analyze_missing_mods(
     for cat in missing_by_cat:
         missing_by_cat[cat].sort(key=lambda m: m.get("name", ""))
 
-    return owned_mods, dict(missing_by_cat), dict(owned_by_cat), len(unique_game_mods), drop_data
+    return owned_mods, dict(missing_by_cat), dict(owned_by_cat), drop_data
 
 
 # ---------------------------------------------------------------------------
@@ -399,15 +399,12 @@ class ModsReport:
     owned_unique: int
     total_copies: int
     total_missing: int
-    total_game_mods: int
     categories: list[ModCategory] = field(default_factory=list)
 
 
 def build_mods_report(db: ExportDB, inv: dict) -> ModsReport:
     """Build the full missing-mods report shared by ``mods`` and the web UI."""
-    owned_mods, missing_by_cat, owned_by_cat, total_game_mods, drop_data = analyze_missing_mods(
-        db, inv
-    )
+    owned_mods, missing_by_cat, owned_by_cat, drop_data = analyze_missing_mods(db, inv)
 
     categories: list[ModCategory] = []
     for cat in sorted(missing_by_cat.keys(), key=_category_sort_key):
@@ -432,7 +429,6 @@ def build_mods_report(db: ExportDB, inv: dict) -> ModsReport:
         owned_unique=len(owned_mods),
         total_copies=sum(owned_mods.values()),
         total_missing=sum(len(mods) for mods in missing_by_cat.values()),
-        total_game_mods=total_game_mods,
         categories=categories,
     )
 
