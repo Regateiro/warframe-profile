@@ -65,17 +65,18 @@ from warframe_profile.model.utils import normalize_path
 from warframe_profile.presenter.mastery import MasteryReport, build_mastery_report
 from warframe_profile.presenter.missing_mods import ModsReport, build_mods_report
 from warframe_profile.view.web.templates import (
+    relic_category_tabs,
     render_cleanup_excess,
     render_cleanup_rebuy,
     render_cleanup_sell,
     render_craft,
     render_craft_result,
-    render_ducats_buildable,
-    render_ducats_excess,
-    render_ducats_missing,
-    render_ducats_sell,
+    render_ducats,
     render_home,
-    render_mastery,
+    render_mastery_blueprint,
+    render_mastery_in_progress,
+    render_mastery_never_touched,
+    render_mastery_ready,
     render_mods,
     render_relics_needed,
     render_relics_safe,
@@ -485,24 +486,36 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         self._html(200, render_home())
 
     def _handle_ducats(self, subpath: str):
-        """Serve ducat analysis sub-views (missing / buildable / excess / sell)."""
-        _ensure_analysis()
+        """Serve the single Ducats view (sell-for-ducats list)."""
         if subpath == "/buildable":
-            self._html(200, render_ducats_buildable(_cache.analysis_result))
-        elif subpath == "/excess":
-            self._html(200, render_ducats_excess(_cache.analysis_result))
-        elif subpath == "/sell":
-            self._html(200, render_ducats_sell(_cache.analysis_result))
-        else:
-            self._html(200, render_ducats_missing(_cache.analysis_result))
+            # Moved to the Mastery tab; keep old bookmarks working.
+            self._redirect("/mastery")
+            return
+        if subpath:
+            # Missing/Excess/Sell sub-views were removed.
+            self._redirect("/ducats")
+            return
+        _ensure_analysis()
+        self._html(200, render_ducats(_cache.analysis_result))
 
     def _handle_relics(self, subpath: str):
-        """Serve relic analysis sub-views (needed drops / safe-to-spam)."""
+        """Serve relic views: Safe to Spam default, then needed item types."""
         _ensure_relics()
+        tabs = relic_category_tabs(_cache.needed_drops)
         if subpath == "/safe":
-            self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
-        else:
-            self._html(200, render_relics_needed(_cache.needed_drops, _cache.relic_info))
+            self._redirect("/relics")
+            return
+        if subpath == "/needed":
+            self._redirect(tabs[1][2] if len(tabs) > 1 else "/relics")
+            return
+        if subpath.startswith("/needed/"):
+            slug = subpath.removeprefix("/needed/")
+            if any(key == slug for key, _, _ in tabs):
+                self._html(200, render_relics_needed(_cache.needed_drops, slug))
+            else:
+                self._redirect("/relics")
+            return
+        self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
 
     def _handle_craft(self, query: str):
         """Serve craft search results or the empty search form."""
@@ -547,11 +560,21 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             ),
         )
 
-    def _handle_mastery(self):
-        """Serve the mastery progression view."""
+    def _handle_mastery(self, subpath: str):
+        """Serve mastery progression sub-views (ready / blueprint / never / progress)."""
         _ensure_mastery()
         assert _cache.mastery_report is not None  # guaranteed by _ensure_mastery
-        self._html(200, render_mastery(_cache.mastery_report))
+        report = _cache.mastery_report
+        if subpath == "/blueprint-ready":
+            self._html(200, render_mastery_blueprint(report))
+        elif subpath == "/never-touched":
+            self._html(200, render_mastery_never_touched(report))
+        elif subpath == "/in-progress":
+            self._html(200, render_mastery_in_progress(report))
+        else:
+            _ensure_analysis()
+            assert _cache.analysis_result is not None  # guaranteed by _ensure_analysis
+            self._html(200, render_mastery_ready(report, _cache.analysis_result))
 
     def _handle_mods(self):
         """Serve the missing-mods view."""
@@ -640,11 +663,11 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
         Routes:
             /               → Home
-            /ducats[/...]   → Ducat analysis (missing / buildable / excess / sell)
-            /relics[/...]   → Relic analysis (needed drops / safe-to-spam)
+            /ducats         → Ducat sell analysis
+            /relics[/...]   → Safe-to-spam relics + needed drops by item type
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
-            /mastery        → Mastery progression (blueprint ready, gaps)
+            /mastery[/...]  → Mastery (ready to build / blueprint / never touched / in progress)
             /mods           → Missing mods by in-game category
             /cleanup[/...]  → Inventory cleanup (rebuy / sell / excess)
         """
@@ -663,8 +686,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_craft((params.get("q") or [""])[0].strip())
             elif path == "/weapon-chains":
                 self._handle_weapon_chains()
-            elif path == "/mastery":
-                self._handle_mastery()
+            elif path.startswith("/mastery"):
+                self._handle_mastery(path.removeprefix("/mastery"))
             elif path == "/mods":
                 self._handle_mods()
             elif path.startswith("/cleanup"):

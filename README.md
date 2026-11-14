@@ -218,7 +218,8 @@ The analysis shows:
 - **Ready to Build** — Primes whose every part is owned, including finished
   Prime weapons consumed by akimbo variants (e.g. two Magnus Prime for
   Akmagnus Prime). An item only counts as buildable when those sub-crafts
-  can actually be made from owned parts.
+  can actually be made from owned parts. Shown in the CLI report and under
+  the web **Mastery → Ready to Build** subtab.
 - **Crafting** — items currently in the foundry. Their blueprint and parts
   are already committed, so they are counted separately rather than as
   owned or buildable.
@@ -226,8 +227,14 @@ The analysis shows:
 - **Ducat summary** — total ducats from surplus parts and from parts you
   need to keep for builds.
 
-In the web UI these appear as separate **Missing**, **Ready to Build**,
-**Excess**, and **Sell** sub-tabs.
+In the web UI the **Ducats** tab shows the sell-for-ducats list.
+
+### Mastery progression
+
+The web **Mastery** tab is split into **Ready to Build**, **Blueprint Ready**,
+**Never Touched**, and **In Progress** subtabs, with the progression summary
+shown above them. Items in the Blueprint Ready list link to the Craft tab for
+their full crafting breakdown.
 
 ### Crafting tree browser
 

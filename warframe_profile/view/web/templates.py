@@ -9,7 +9,8 @@ The page layout includes:
     - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Mastery,
       Mods, Cleanup).
     - Refresh Inventory button (POSTs to /refresh).
-    - Subtab bars for views with multiple sub-sections (ducats, relics, cleanup).
+    - Subtab bars for views with multiple sub-sections (relics, mastery,
+      cleanup).
 
 This module is the **web view** in the MVP pattern.
 """
@@ -33,7 +34,7 @@ from warframe_profile.model.craft_model import (
     weapon_name,
 )
 from warframe_profile.model.utils import normalize_path
-from warframe_profile.view.report import is_prime_part, part_label
+from warframe_profile.view.report import part_label
 
 GREEN = "#27ae60"
 RED = "#e74c3c"
@@ -259,17 +260,43 @@ def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
     return f'<div class="tab-bar">{links}</div>'
 
 
-_DUCATS_SUBTABS = [
-    ("missing", "Missing", "/ducats"),
-    ("buildable", "Ready to Build", "/ducats/buildable"),
-    ("excess", "Excess", "/ducats/excess"),
-    ("sell", "Sell", "/ducats/sell"),
+_MASTERY_SUBTABS = [
+    ("ready", "Ready to Build", "/mastery"),
+    ("blueprint", "Blueprint Ready", "/mastery/blueprint-ready"),
+    ("never", "Never Touched", "/mastery/never-touched"),
+    ("progress", "In Progress", "/mastery/in-progress"),
 ]
 
-_RELICS_SUBTABS = [
-    ("needed", "Needed Drops", "/relics"),
-    ("safe", "Safe-to-Spam", "/relics/safe"),
-]
+#: Preferred tab order for needed-drop categories; unknown categories follow
+#: alphabetically. Safe-to-Spam is always first.
+_RELIC_CATEGORY_ORDER = (
+    "Warframes",
+    "Primary",
+    "Secondary",
+    "Melee",
+    "Archwing",
+    "Sentinels",
+    "Arch-Gun",
+)
+
+
+def relic_category_slug(category: str) -> str:
+    """Return the URL slug used for a needed-drop category tab."""
+    return category.lower().replace(" ", "-")
+
+
+def relic_category_tabs(needed) -> list[tuple[str, str, str]]:
+    """Return the Relics subtabs: Safe to Spam first, then needed categories."""
+    categories = {n.category for n in needed if n.category}
+    ordered = [c for c in _RELIC_CATEGORY_ORDER if c in categories]
+    ordered.extend(sorted(categories - set(ordered)))
+
+    tabs = [("safe", "Safe to Spam", "/relics")]
+    for category in ordered:
+        slug = relic_category_slug(category)
+        tabs.append((slug, category, f"/relics/needed/{slug}"))
+    return tabs
+
 
 _CLEANUP_SUBTABS = [
     ("rebuy", "Re-Buyable", "/cleanup"),
@@ -290,11 +317,11 @@ def render_home() -> str:
         """
 <div class="flash">Select a tab above to explore your Warframe profile.</div>
 <ul style="margin-left:20px;line-height:1.8">
-  <li><strong>Ducats</strong> — Prime part analysis, missing items, sell recommendations</li>
+  <li><strong>Ducats</strong> — Surplus Prime parts to sell at Baro Ki'Teer</li>
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
-  <li><strong>Mastery</strong> — Masterable items ranked, in progress, and blueprint-ready</li>
+  <li><strong>Mastery</strong> — Ready to build, blueprint, never-touched, and in-progress</li>
   <li><strong>Mods</strong> — Missing mods grouped by in-game category</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
 </ul>
@@ -507,107 +534,14 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 # ---------------------------------------------------------------------------
 # Ducats
 # ---------------------------------------------------------------------------
-# Three sub-views:
-#   Missing — masterable Prime items with zero parts owned.
-#   Excess  — per-item breakdown of missing and spare parts.
-#   Sell    — aggregated surplus parts with ducat values.
+# Single view: aggregated surplus parts with ducat values.
 #
 
 
-def render_ducats_missing(data) -> str:
-    """Render the Ducats — Missing sub-view (unowned Prime items + summary)."""
-    items = data.items
-    missing = data.missing
-    total_safe = data.total_ducats_safe
-    total_keep = data.total_ducats_keep
-    parts = []
-
-    if missing:
-        rows = "".join(
-            f"<tr><td>{_esc(m.name)}</td><td>{_esc(m.category)}</td>"
-            f'<td class="num">{m.mastery_req or ""}</td></tr>'
-            for m in sorted(missing, key=lambda x: (x.category, x.name))
-        )
-        parts.append(f"""<h2>Missing Prime Items (no parts owned)</h2>
-<table><thead><tr><th>Name</th><th>Category</th><th class='num'>MR</th></tr></thead>
-<tbody>{rows}</tbody></table>""")
-
-    n_build = sum(1 for i in items if i.status == "buildable")
-    n_craft = sum(1 for i in items if i.status == "crafting")
-    n_partial = sum(1 for i in items if i.status == "partial")
-    n_have = sum(1 for i in items if i.status == "have_copy")
-    bits = []
-    if n_have:
-        bits.append(f"{n_have} owned")
-    if n_build:
-        bits.append(f"{n_build} buildable")
-    if n_craft:
-        bits.append(f"{n_craft} crafting")
-    if n_partial:
-        bits.append(f"{n_partial} partial")
-    parts.append(f"""<h2>Summary</h2>
-<p>{", ".join(bits)} &mdash; {total_safe:,} ducats safe &mdash; {total_keep:,} ducats keep</p>""")
-
-    content = _subtab_bar(_DUCATS_SUBTABS, "missing") + "".join(parts)
-    return _page("Ducats — Missing", content, "ducats")
-
-
-def render_ducats_buildable(data) -> str:
-    """Render the Ducats — Ready to Build sub-view."""
-    buildable = sorted(
-        (i for i in data.items if i.status == "buildable"),
-        key=lambda i: (i.category, i.name),
-    )
-    parts = []
-    if buildable:
-        rows = "".join(
-            f"<tr><td>{_esc(i.name)}</td><td>{_esc(i.category)}</td>"
-            f'<td class="num">{i.mastery_req or ""}</td></tr>'
-            for i in buildable
-        )
-        parts.append(f"""<h2>Ready to Build</h2>
-<table><thead><tr><th>Name</th><th>Category</th><th class='num'>MR</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<p class="dim">Every part and sub-craft ingredient is owned.</p>""")
-    else:
-        parts.append(
-            '<div class="flash">Nothing is ready to build right now \u2014 '
-            "items appear here when every part and sub-craft ingredient is owned.</div>"
-        )
-
-    content = _subtab_bar(_DUCATS_SUBTABS, "buildable") + "".join(parts)
-    return _page("Ducats — Ready to Build", content, "ducats")
-
-
-def render_ducats_excess(data) -> str:
-    """Render the Ducats — Excess sub-view (missing and surplus prime parts)."""
-    items = data.items
-    parts = []
-
-    relevant = [
-        i
-        for i in items
-        if (
-            any(p.surplus > 0 and is_prime_part(p.name) for p in i.parts)
-            or any(p.missing > 0 and is_prime_part(p.name) for p in i.parts)
-        )
-    ]
-    if relevant:
-        rows = "".join(_item_row(i) for i in sorted(relevant, key=lambda x: x.name))
-        parts.append(f"""<h2>Excess Prime Parts</h2>
-<table><thead><tr><th>Item</th><th class='num'>Copies</th>
-<th>Missing</th><th>Excess</th><th class='num'>Ducats</th></tr></thead>
-<tbody>{rows}</tbody></table>""")
-
-    content = _subtab_bar(_DUCATS_SUBTABS, "excess") + "".join(parts)
-    return _page("Ducats — Excess", content, "ducats")
-
-
-def render_ducats_sell(data) -> str:
-    """Render the Ducats — Sell sub-view (surplus parts with ducat values)."""
+def render_ducats(data) -> str:
+    """Render the Ducats tab (surplus parts with ducat values)."""
     items = data.items
     total_safe = data.total_ducats_safe
-    parts = []
 
     sell: dict = defaultdict(lambda: {"count": 0, "ducats": 0})
     for item in items:
@@ -616,74 +550,65 @@ def render_ducats_sell(data) -> str:
                 key = (item.name, p.name)
                 sell[key]["count"] += p.surplus
                 sell[key]["ducats"] = p.ducats
-    if sell:
-        srows = "".join(
-            f"<tr><td>{_esc(part_label(item, part))}</td>"
-            f'<td class="num">x{info["count"]}</td>'
-            f'<td class="num">{info["ducats"]}</td>'
-            f'<td class="num">{info["count"] * info["ducats"]}</td></tr>'
-            for (item, part), info in sorted(sell.items())
+
+    if not sell:
+        return _page(
+            "Ducats",
+            '<div class="flash">Nothing to sell for ducats right now '
+            "\u2014 surplus Prime parts will appear here.</div>",
+            "ducats",
         )
-        parts.append(f"""<h2>Sell for Ducats</h2>
+
+    srows = "".join(
+        f"<tr><td>{_esc(part_label(item, part))}</td>"
+        f'<td class="num">x{info["count"]}</td>'
+        f'<td class="num">{info["ducats"]}</td>'
+        f'<td class="num">{info["count"] * info["ducats"]}</td></tr>'
+        for (item, part), info in sorted(sell.items())
+    )
+    content = f"""<h2>Sell for Ducats</h2>
 <table><thead><tr><th>Part</th><th class='num'>Qty</th>
 <th class='num'>Duc</th><th class='num'>Total</th></tr></thead>
 <tbody>{srows}</tbody></table>
-<p><strong>Total: {total_safe:,} ducats</strong></p>""")
-
-    content = _subtab_bar(_DUCATS_SUBTABS, "sell") + "".join(parts)
-    return _page("Ducats — Sell", content, "ducats")
-
-
-def _item_row(i) -> str:
-    """Return one HTML table row for a prime item's excess/missing breakdown."""
-    missing_parts = [p for p in i.parts if p.missing > 0 and is_prime_part(p.name)]
-    missing_str = ", ".join(f"{p.name} x{p.missing}" for p in missing_parts) or "—"
-    surplus_parts = [p for p in i.parts if p.surplus > 0 and is_prime_part(p.name)]
-    surplus_str = ", ".join(f"{p.name} x{p.surplus}" for p in surplus_parts) or "—"
-    excess_duc = sum(p.surplus * p.ducats for p in surplus_parts)
-    return (
-        f"<tr><td>{_esc(i.name)}</td>"
-        f'<td class="num">{i.needed_builds}</td>'
-        f"<td>{_esc(missing_str)}</td>"
-        f"<td>{_esc(surplus_str)}</td>"
-        f'<td class="num">{excess_duc if excess_duc else ""}</td></tr>'
-    )
+<p><strong>Total: {total_safe:,} ducats</strong></p>"""
+    return _page("Ducats", content, "ducats")
 
 
 # ---------------------------------------------------------------------------
 # Relics
 # ---------------------------------------------------------------------------
-# Two sub-views:
-#   Needed Drops — prime parts still missing + which owned relics drop them.
-#   Safe-to-Spam — relics whose every prime-part reward is already owned.
+# Safe to Spam (default) plus one subtab per needed-drop item category:
+# Warframes, Primary, Secondary, Melee, Archwing, etc.
 #
 
 
-def render_relics_needed(needed, relics) -> str:
-    """Render the Relics — Needed Drops sub-view (missing parts + relic drops)."""
-    parts = []
+def render_relics_needed(needed, category_slug: str) -> str:
+    """Render one needed-drops category (missing parts + owned relic drops)."""
+    items = [n for n in needed if relic_category_slug(n.category) == category_slug]
+    label = items[0].category if items else category_slug
 
-    if needed:
+    parts = []
+    if items:
         rows = "".join(
             f"<tr><td>{_esc(n.part_name)}</td><td>{_esc(n.item_name)}</td>"
             f'<td class="num">x{n.missing}</td>'
             f'<td class="num">{n.ducats or ""}</td>'
             f"<td>{_esc(', '.join(f'{name} x{count}' for name, count, _ in n.drops)) if n.drops else '—'}</td></tr>"  # noqa: E501
-            for n in needed
+            for n in items
         )
-        parts.append(f"""<h2>Needed Prime Parts &amp; Relic Drops</h2>
+        parts.append(f"""<h2>{_esc(label)} &mdash; Needed Prime Parts</h2>
 <table><thead><tr><th>Part</th><th>Item</th><th class='num'>Need</th>
 <th class='num'>Duc</th><th>Owned Relic Drops</th></tr></thead>
 <tbody>{rows}</tbody></table>""")
     else:
-        parts.append('<p class="green">No missing parts — you have everything!</p>')
+        parts.append('<p class="green">No missing parts in this category.</p>')
 
-    content = _subtab_bar(_RELICS_SUBTABS, "needed") + "".join(parts)
-    return _page("Relics — Needed", content, "relics")
+    content = _subtab_bar(relic_category_tabs(needed), category_slug) + "".join(parts)
+    return _page(f"Relics — {label}", content, "relics")
 
 
 def render_relics_safe(needed, relics) -> str:
-    """Render the Relics — Safe-to-Spam sub-view (relics safe to crack)."""
+    """Render the Relics — Safe-to-Spam view (relics safe to crack)."""
     parts = []
 
     safe = [r for r in relics if r.safe and r.count > 0]
@@ -699,9 +624,11 @@ def render_relics_safe(needed, relics) -> str:
 <th>Vaulted</th></tr></thead>
 <tbody>{rows}</tbody></table>
 <p>{len(safe)} relic{"s" if len(safe) != 1 else ""} safe to spam.</p>""")
+    else:
+        parts.append('<div class="flash">No relics are safe to spam yet.</div>')
 
-    content = _subtab_bar(_RELICS_SUBTABS, "safe") + "".join(parts)
-    return _page("Relics — Safe", content, "relics")
+    content = _subtab_bar(relic_category_tabs(needed), "safe") + "".join(parts)
+    return _page("Relics — Safe to Spam", content, "relics")
 
 
 # ---------------------------------------------------------------------------
@@ -833,8 +760,9 @@ def render_weapon_chains(
 # ---------------------------------------------------------------------------
 # Mastery
 # ---------------------------------------------------------------------------
-# Mirrors the CLI mastery report: summary plus blueprint-ready, never-touched
-# (tiered), and in-progress (tiered) sections.
+# Mirrors the CLI mastery report, split into subtabs: Ready to Build (Prime
+# parts complete), Blueprint Ready, Never Touched (tiered), and In Progress
+# (tiered). The progression summary is shown above every subtab.
 #
 
 
@@ -863,11 +791,10 @@ def _mastery_table(rows, link_craft: bool = False) -> str:
 <th class='num'>MR</th><th>Source</th></tr></thead><tbody>{body}</tbody></table>"""
 
 
-def render_mastery(report) -> str:
-    """Render the Mastery tab (summary + item sections grouped by tier)."""
+def _mastery_summary(report) -> str:
+    """Render the shared progression summary shown above every subtab."""
     blueprint_ready, never_touched, in_progress = report.sections
-    parts = [
-        f"""<h2>Summary</h2>
+    return f"""<h2>Summary</h2>
 <p>{report.mastered:,} / {report.total:,} masterable items mastered
    ({report.percent}%)</p>
 <p>{blueprint_ready.count} blueprints ready
@@ -875,37 +802,81 @@ def render_mastery(report) -> str:
    &middot; {in_progress.count} in progress
    &middot; {report.remaining} remaining</p>
 <p>~{report.total_mr:,} MR available from unmastered items</p>"""
-    ]
 
-    for section in report.sections:
-        if not section.rows:
-            continue
-        parts.append(f"<h2>{section.header.title()}</h2>")
-        if section.desc:
-            parts.append(f'<p class="dim">{html.escape(section.desc)}</p>')
-        parts.append(
-            f"<p>{section.count} item{'s' if section.count != 1 else ''}"
-            f" &mdash; ~{section.mr:,} MR</p>"
-        )
 
-        if not section.group_by_tier:
-            parts.append(_mastery_table(section.rows, link_craft=section.link_craft))
-            continue
+def _mastery_section_body(section) -> str:
+    """Render one mastery section, optionally grouped by farming tier."""
+    if not section.rows:
+        return '<div class="flash">No items in this section.</div>'
 
-        for group in section.tier_groups:
-            parts.append(f"<h3>{html.escape(group.label)}</h3>")
-            parts.append(f'<p class="dim">{html.escape(group.desc)}</p>')
-            parts.append(
-                f"<p>{group.count} item{'s' if group.count != 1 else ''}"
-                f" &mdash; ~{group.mr:,} MR</p>"
-            )
-            parts.append(_mastery_table(group.rows, link_craft=section.link_craft))
-
+    parts = []
+    if section.desc:
+        parts.append(f'<p class="dim">{html.escape(section.desc)}</p>')
     parts.append(
-        f"<p><strong>{report.remaining} items remaining"
-        f" &mdash; ~{report.total_mr:,} MR to earn</strong></p>"
+        f"<p>{section.count} item{'s' if section.count != 1 else ''} &mdash; ~{section.mr:,} MR</p>"
     )
-    return _page("Mastery", "".join(parts), "mastery")
+
+    if not section.group_by_tier:
+        parts.append(_mastery_table(section.rows, link_craft=section.link_craft))
+        return "".join(parts)
+
+    for group in section.tier_groups:
+        parts.append(f"<h3>{html.escape(group.label)}</h3>")
+        if group.desc:
+            parts.append(f'<p class="dim">{html.escape(group.desc)}</p>')
+        parts.append(
+            f"<p>{group.count} item{'s' if group.count != 1 else ''} &mdash; ~{group.mr:,} MR</p>"
+        )
+        parts.append(_mastery_table(group.rows, link_craft=section.link_craft))
+    return "".join(parts)
+
+
+def _mastery_page(report, active: str, title: str, body: str) -> str:
+    """Wrap a mastery subtab in the subtab bar and shared summary."""
+    content = _subtab_bar(_MASTERY_SUBTABS, active) + _mastery_summary(report) + body
+    return _page(title, content, "mastery")
+
+
+def render_mastery_ready(report, data) -> str:
+    """Render the Ready to Build subtab (Prime items with all parts owned)."""
+    buildable = sorted(
+        (i for i in data.items if i.status == "buildable"),
+        key=lambda i: (i.category, i.name),
+    )
+    if buildable:
+        rows = "".join(
+            f"<tr><td>{_esc(i.name)}</td><td>{_esc(i.category)}</td>"
+            f'<td class="num">{i.mastery_req or ""}</td></tr>'
+            for i in buildable
+        )
+        body = f"""<h2>Ready to Build</h2>
+<table><thead><tr><th>Name</th><th>Category</th><th class='num'>MR</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<p class="dim">Every part and sub-craft ingredient is owned.</p>"""
+    else:
+        body = (
+            '<div class="flash">Nothing is ready to build right now \u2014 '
+            "Prime items appear here when every part and sub-craft ingredient is owned.</div>"
+        )
+    return _mastery_page(report, "ready", "Mastery — Ready to Build", body)
+
+
+def render_mastery_blueprint(report) -> str:
+    """Render the Blueprint Ready subtab."""
+    body = f"<h2>Blueprint Ready</h2>{_mastery_section_body(report.sections[0])}"
+    return _mastery_page(report, "blueprint", "Mastery — Blueprint Ready", body)
+
+
+def render_mastery_never_touched(report) -> str:
+    """Render the Never Touched subtab."""
+    body = f"<h2>Never Touched</h2>{_mastery_section_body(report.sections[1])}"
+    return _mastery_page(report, "never", "Mastery — Never Touched", body)
+
+
+def render_mastery_in_progress(report) -> str:
+    """Render the In Progress subtab."""
+    body = f"<h2>In Progress</h2>{_mastery_section_body(report.sections[2])}"
+    return _mastery_page(report, "progress", "Mastery — In Progress", body)
 
 
 # ---------------------------------------------------------------------------

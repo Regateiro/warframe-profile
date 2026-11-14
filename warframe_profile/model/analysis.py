@@ -655,6 +655,7 @@ class NeededPart:
         part_name:  WFCD-style reward name (e.g. "Ash Prime Chassis Blueprint").
         item_name:  Parent prime item name (e.g. "Ash Prime").
         part_type:  Short part name (e.g. "Chassis").
+        category:   Parent item category (e.g. "Warframes", "Primary").
         missing:    How many more copies are needed.
         ducats:     Ducat value of a single copy.
         drops:      List of ``(relic_short_name, relic_count, tier)`` tuples.
@@ -663,6 +664,7 @@ class NeededPart:
     part_name: str
     item_name: str
     part_type: str
+    category: str
     missing: int
     ducats: int
     drops: list[tuple[str, int, str]]
@@ -722,6 +724,7 @@ def _process_needed_part(
         part_name=primary_name,
         item_name=item_name,
         part_type=p["name"],
+        category=cat,
         missing=missing,
         ducats=p["ducats"],
         drops=part_drops,

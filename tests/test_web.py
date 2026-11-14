@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from warframe_profile.model.analysis import (
     AnalysisResult,
     ItemResult,
-    MissingPrime,
+    NeededPart,
     PartAnalysis,
 )
 from warframe_profile.presenter.mastery import (
@@ -22,13 +22,14 @@ from warframe_profile.presenter.web_server import (
 )
 from warframe_profile.view.web.templates import (
     _esc,
-    _item_row,
+    relic_category_tabs,
     render_cleanup_rebuy,
     render_craft_result,
-    render_ducats_buildable,
-    render_ducats_missing,
+    render_ducats,
     render_home,
-    render_mastery,
+    render_mastery_blueprint,
+    render_mastery_ready,
+    render_relics_needed,
     render_relics_safe,
 )
 
@@ -177,21 +178,95 @@ def test_esc_escapes_markup():
     assert _esc("<script>&") == "&lt;script&gt;&amp;"
 
 
-def test_render_ducats_missing_escapes_names():
-    data = AnalysisResult(
-        missing=[
-            MissingPrime(name="<script>alert(1)</script>", category="<b>Cat</b>", mastery_req=0)
-        ]
+def _sellable_item(
+    name: str = "Akmagnus Prime",
+    part: str = "Akmagnus Prime Link",
+    surplus: int = 2,
+    ducats: int = 45,
+) -> ItemResult:
+    """Minimal prime item with one surplus ducat-valued part."""
+    return ItemResult(
+        name=name,
+        category="Secondary",
+        status="partial",
+        needed_builds=1,
+        extra_builds=0,
+        mastery_req=14,
+        has_copy=False,
+        parts=[
+            PartAnalysis(
+                name=part,
+                owned=surplus,
+                needed=1,
+                surplus=surplus,
+                missing=0,
+                ducats=ducats,
+            )
+        ],
+        can_build=False,
+        missing_parts=0,
+        total_parts=1,
     )
 
-    page = render_ducats_missing(data)
 
-    assert "<script>alert(1)</script>" not in page
-    assert "&lt;script&gt;" in page
-    assert "&lt;b&gt;Cat&lt;/b&gt;" in page
+def test_render_ducats_escapes_part_names():
+    data = AnalysisResult(
+        items=[_sellable_item(name="<script>Lato Prime</script>", part="Barrel <b>x</b>")],
+        total_ducats_safe=30,
+    )
+
+    page = render_ducats(data)
+
+    assert "<script>Lato Prime</script>" not in page
+    assert "&lt;script&gt;Lato Prime&lt;/script&gt;" in page
+    assert "<b>x</b>" not in page
+    assert "&lt;b&gt;x&lt;/b&gt;" in page
+    assert "Total: 30 ducats" in page
 
 
-def test_render_ducats_buildable_lists_ready_items():
+def test_ducats_page_has_no_subtabs():
+    page = render_ducats(AnalysisResult(items=[_sellable_item()], total_ducats_safe=90))
+
+    assert "Sell for Ducats" in page
+    assert 'class="tab-bar"' not in page
+    assert "/ducats/excess" not in page
+    assert "/ducats/sell" not in page
+    assert "Ready to Build" not in page
+
+
+def test_render_ducats_shows_empty_state():
+    page = render_ducats(AnalysisResult())
+
+    assert "Nothing to sell for ducats" in page
+    assert 'class="tab-bar"' not in page
+
+
+def _mastery_report(blueprint_rows=None) -> MasteryReport:
+    """Minimal mastery report for subtab rendering tests."""
+    return MasteryReport(
+        total=10,
+        mastered=4,
+        sections=[
+            MasterySection(
+                header="BLUEPRINT READY",
+                desc="Blueprint owned",
+                rows=blueprint_rows or [],
+                group_by_tier=False,
+                link_craft=True,
+            ),
+            MasterySection(
+                header="NEVER TOUCHED",
+                desc="No XP recorded",
+                group_by_tier=False,
+            ),
+            MasterySection(header="IN PROGRESS", desc="Partial XP"),
+        ],
+        remaining=6,
+        total_mr=60_000,
+    )
+
+
+def test_render_mastery_ready_lists_buildable_primes():
     item = ItemResult(
         name="Akmagnus Prime",
         category="Secondary",
@@ -206,49 +281,44 @@ def test_render_ducats_buildable_lists_ready_items():
         total_parts=2,
     )
 
-    page = render_ducats_buildable(AnalysisResult(items=[item]))
+    page = render_mastery_ready(_mastery_report(), AnalysisResult(items=[item]))
 
     assert "Akmagnus Prime" in page
-    assert "/ducats/buildable" in page
+    assert "/mastery/blueprint-ready" in page
+    assert "/ducats/buildable" not in page
     assert "Nothing is ready to build" not in page
 
 
-def test_render_ducats_buildable_shows_empty_state():
-    page = render_ducats_buildable(AnalysisResult())
+def test_render_mastery_ready_shows_empty_state():
+    page = render_mastery_ready(_mastery_report(), AnalysisResult())
 
     assert "Nothing is ready to build" in page
-    assert "/ducats/buildable" in page
+    assert "/mastery/blueprint-ready" in page
 
 
-def test_item_row_escapes_item_and_part_names():
-    item = ItemResult(
-        name="Lato Prime <b>X</b>",
-        category="Secondary",
-        status="partial",
-        needed_builds=1,
-        extra_builds=0,
-        mastery_req=0,
-        has_copy=False,
-        parts=[
-            PartAnalysis(
-                name="Lato Prime <i>Barrel</i>",
-                owned=2,
-                needed=1,
-                surplus=1,
-                missing=0,
-                ducats=15,
-            )
-        ],
-        can_build=False,
-        missing_parts=0,
-        total_parts=1,
-    )
+def test_old_ducats_buildable_url_redirects_to_mastery():
+    from warframe_profile.presenter import web_server
 
-    row = _item_row(item)
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._redirect = lambda path: calls.append(path)
 
-    assert "Lato Prime &lt;b&gt;X&lt;/b&gt;" in row
-    assert "Lato Prime &lt;i&gt;Barrel&lt;/i&gt;" in row
-    assert "<i>Barrel</i>" not in row
+    web_server.WarframeHandler._handle_ducats(handler, "/buildable")
+
+    assert calls == ["/mastery"]
+
+
+def test_old_ducats_subviews_redirect_to_ducats():
+    from warframe_profile.presenter import web_server
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._redirect = lambda path: calls.append(path)
+
+    web_server.WarframeHandler._handle_ducats(handler, "/sell")
+    web_server.WarframeHandler._handle_ducats(handler, "/excess")
+
+    assert calls == ["/ducats", "/ducats"]
 
 
 def test_render_relics_safe_escapes_relic_names():
@@ -260,6 +330,87 @@ def test_render_relics_safe_escapes_relic_names():
 
     assert "<script>x</script>" not in page
     assert "&lt;script&gt;" in page
+
+
+def _needed_part(
+    part: str,
+    item: str,
+    category: str,
+) -> NeededPart:
+    return NeededPart(
+        part_name=part,
+        item_name=item,
+        part_type=part,
+        category=category,
+        missing=1,
+        ducats=15,
+        drops=[],
+    )
+
+
+def test_relic_category_tabs_put_safe_first_and_order_categories():
+    needed = [
+        _needed_part("Orthos Prime Blade", "Orthos Prime", "Melee"),
+        _needed_part("Ash Prime Chassis", "Ash Prime", "Warframes"),
+        _needed_part("Odonata Prime Wings", "<ARCHWING> Odonata Prime", "Archwing"),
+        _needed_part("Corvas Prime Barrel", "<ARCHWING> Corvas Prime", "Arch-Gun"),
+    ]
+
+    tabs = relic_category_tabs(needed)
+
+    assert tabs[0] == ("safe", "Safe to Spam", "/relics")
+    assert [key for key, _, _ in tabs[1:]] == [
+        "warframes",
+        "melee",
+        "archwing",
+        "arch-gun",
+    ]
+
+
+def test_render_relics_needed_filters_by_category():
+    needed = [
+        _needed_part("Ash Prime Chassis", "Ash Prime", "Warframes"),
+        _needed_part("Orthos Prime Blade", "Orthos Prime", "Melee"),
+    ]
+
+    page = render_relics_needed(needed, "warframes")
+
+    assert "Ash Prime Chassis" in page
+    assert "Orthos Prime Blade" not in page
+    assert "/relics/needed/melee" in page
+    assert 'class="active">Warframes' in page
+
+
+def test_relics_route_defaults_to_safe_and_redirects_old_paths(monkeypatch):
+    from warframe_profile.presenter import web_server
+
+    needed = [_needed_part("Ash Prime Chassis", "Ash Prime", "Warframes")]
+    monkeypatch.setattr(web_server, "_ensure_relics", lambda: None)
+    monkeypatch.setattr(web_server._cache, "needed_drops", needed)
+    monkeypatch.setattr(web_server._cache, "relic_info", [])
+    monkeypatch.setattr(web_server, "render_relics_safe", lambda n, r: "safe-page")
+    monkeypatch.setattr(
+        web_server,
+        "render_relics_needed",
+        lambda n, slug: f"needed-{slug}",
+    )
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._html = lambda code, page: calls.append((code, page))
+    handler._redirect = lambda path: calls.append(("redirect", path))
+
+    web_server.WarframeHandler._handle_relics(handler, "")
+    web_server.WarframeHandler._handle_relics(handler, "/safe")
+    web_server.WarframeHandler._handle_relics(handler, "/needed")
+    web_server.WarframeHandler._handle_relics(handler, "/needed/warframes")
+
+    assert calls == [
+        (200, "safe-page"),
+        ("redirect", "/relics"),
+        ("redirect", "/relics/needed/warframes"),
+        (200, "needed-warframes"),
+    ]
 
 
 def test_render_cleanup_rebuy_escapes_equipment_names():
@@ -305,11 +456,12 @@ def test_render_mastery_links_blueprint_rows_to_craft():
         ],
     )
 
-    page = render_mastery(report)
+    page = render_mastery_blueprint(report)
 
     assert 'href="/craft?q=Silva+%26+Aegis+Prime"' in page
     assert "Silva &amp; Aegis Prime" in page
     assert 'href="/craft?q=Lato+Prime"' not in page
+    assert "/mastery/never-touched" in page
 
 
 def test_render_craft_result_opens_exact_match():
