@@ -102,6 +102,54 @@ def test_analyze_classifies_partial_item():
     assert item.missing_parts == 1
 
 
+def test_analyze_classifies_pending_item_as_crafting():
+    recipe_un = "/Lotus/Types/Recipes/Weapons/LatoPrimeBlueprint"
+    recipes = {
+        recipe_un: {
+            "resultType": _LATO,
+            "ingredients": [],
+            "_recipeKey": recipe_un,
+        }
+    }
+    inventory = {
+        "MiscItems": [
+            {"ItemType": _BARREL, "ItemCount": 1},
+            {"ItemType": _RECEIVER, "ItemCount": 1},
+        ],
+        "PendingRecipes": [{"ItemType": recipe_un}],
+    }
+
+    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS, recipes=recipes)
+
+    assert result.missing == []
+    item = result.items[0]
+    assert item.status == "crafting"
+    assert item.can_build is False
+    assert item.parts == []
+    assert item.missing_parts == 0
+
+
+def test_analyze_keeps_owned_item_owned_while_extra_copy_is_pending():
+    recipe_un = "/Lotus/Types/Recipes/Weapons/LatoPrimeBlueprint"
+    recipes = {
+        recipe_un: {
+            "resultType": _LATO,
+            "ingredients": [],
+            "_recipeKey": recipe_un,
+        }
+    }
+    inventory = {
+        "Pistols": [{"ItemType": _LATO}],
+        "PendingRecipes": [{"ItemType": recipe_un}],
+    }
+
+    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS, recipes=recipes)
+
+    item = result.items[0]
+    assert item.status == "have_copy"
+    assert item.has_copy is True
+
+
 # --- Akimbo Prime weapons (finished Prime consumed as an ingredient) -------
 
 _MAGNUS = "/Lotus/Weapons/Tenno/Pistols/PrimeMagnus/PrimeMagnusWeapon"

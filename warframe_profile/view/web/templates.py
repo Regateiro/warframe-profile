@@ -533,6 +533,7 @@ def render_ducats_missing(data) -> str:
 <tbody>{rows}</tbody></table>""")
 
     n_build = sum(1 for i in items if i.status == "buildable")
+    n_craft = sum(1 for i in items if i.status == "crafting")
     n_partial = sum(1 for i in items if i.status == "partial")
     n_have = sum(1 for i in items if i.status == "have_copy")
     bits = []
@@ -540,6 +541,8 @@ def render_ducats_missing(data) -> str:
         bits.append(f"{n_have} owned")
     if n_build:
         bits.append(f"{n_build} buildable")
+    if n_craft:
+        bits.append(f"{n_craft} crafting")
     if n_partial:
         bits.append(f"{n_partial} partial")
     parts.append(f"""<h2>Summary</h2>

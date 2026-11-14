@@ -148,6 +148,31 @@ def test_refresh_items_reports_failure(monkeypatch):
     assert "refresh_error=" in calls[-1][1]
 
 
+def test_refresh_redirects_with_success_notice(monkeypatch):
+    from warframe_profile.presenter import web_server
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler.path = "/refresh"
+    handler._redirect = lambda path: calls.append(("redirect", path))
+    handler._is_same_origin = lambda: True
+
+    monkeypatch.setattr(web_server._cache, "inventory_path", "/tmp/inventory.json")
+    monkeypatch.setattr(
+        web_server,
+        "reload_inventory",
+        lambda path, refresh: calls.append(("reload", path, refresh)),
+    )
+    monkeypatch.setattr(web_server, "invalidate_analysis", lambda: calls.append("invalidate"))
+
+    web_server.WarframeHandler.do_POST(handler)
+
+    assert ("reload", "/tmp/inventory.json", True) in calls
+    assert "invalidate" in calls
+    assert calls[-1][0] == "redirect"
+    assert "notice=Inventory+refreshed" in calls[-1][1]
+
+
 def test_esc_escapes_markup():
     assert _esc("<script>&") == "&lt;script&gt;&amp;"
 

@@ -94,6 +94,8 @@ def _filter_relevant_items(items: list) -> tuple[list, int]:
     relevant = []
     n_silent = 0
     for i in items:
+        if i.status == "crafting":
+            continue
         has_surplus = any(p.surplus > 0 and is_prime_part(p.name) for p in i.parts)
         has_missing = any(p.missing > 0 and is_prime_part(p.name) for p in i.parts)
         has_ducats = sum(p.surplus * p.ducats for p in i.parts if is_prime_part(p.name)) > 0
@@ -125,6 +127,7 @@ def _print_missing_primes_section(missing) -> None:
 def _print_summary_line(items, total_safe, total_keep) -> None:
     """Print the one-line owned/buildable/partial/ducats summary."""
     n_build = sum(1 for i in items if i.status == "buildable")
+    n_craft = sum(1 for i in items if i.status == "crafting")
     n_partial = sum(1 for i in items if i.status == "partial")
     n_have = sum(1 for i in items if i.status == "have_copy")
     n_extra = sum(i.extra_builds for i in items)
@@ -136,6 +139,8 @@ def _print_summary_line(items, total_safe, total_keep) -> None:
         parts_label.append(lbl)
     if n_build:
         parts_label.append(f"{n_build} buildable")
+    if n_craft:
+        parts_label.append(f"{n_craft} crafting")
     if n_partial:
         parts_label.append(f"{n_partial} partial")
     print(f"  {', '.join(parts_label)}  |  {total_safe:,} ducats safe  {total_keep:,} ducats keep")

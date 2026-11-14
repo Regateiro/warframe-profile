@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from warframe_profile.model.craft_model import resolve_name
-from warframe_profile.model.inventory import ExportDB, build_owned
+from warframe_profile.model.inventory import ExportDB, build_owned, parse_pending_recipes
 from warframe_profile.model.utils import normalize_path
 
 
@@ -29,6 +29,7 @@ class ItemStatus(str, Enum):
 
     HAVE_COPY = "have_copy"
     BUILDABLE = "buildable"
+    CRAFTING = "crafting"
     PARTIAL = "partial"
 
 
@@ -120,7 +121,8 @@ class ItemResult:
     Attributes:
         name:        Display name (e.g. "Rhino Prime").
         category:    Equipment category (e.g. "Warframes", "Primary").
-        status:      ``"have_copy"`` | ``"buildable"`` | ``"partial"``
+        status:      ``"have_copy"`` | ``"buildable"`` | ``"crafting"`` |
+                     ``"partial"``
         needed_builds: How many builds are required *including* the
                        first copy plus extra copies needed for sub-crafts.
         extra_builds: How many of *needed_builds* are for sub-crafts (0
@@ -1536,6 +1538,7 @@ def _classify_prime_item(
     extra_builds: dict,
     prime_map: dict,
     comp_to_bp: dict[str, tuple[str, int]] | None = None,
+    pending: set[str] | None = None,
 ) -> tuple[ItemResult | None, MissingPrime | None]:
     """Analyse one prime item and return ``(item_result, missing_prime)``."""
     norm = normalize_path(un)
@@ -1545,6 +1548,23 @@ def _classify_prime_item(
     has_copy = norm in owned_finished
     needed_builds = (0 if has_copy else 1) + extra_builds.get(un, 0)
     extra = extra_builds.get(un, 0)
+
+    # An item in the foundry is neither owned yet nor still to be built; its
+    # parts (including the consumed blueprint) are already committed.
+    if not has_copy and pending and norm in pending:
+        return _make_item_result(
+            name,
+            cat,
+            ItemStatus.CRAFTING,
+            needed_builds,
+            extra,
+            info["masteryReq"],
+            False,
+            False,
+            0,
+            len(info["parts"]),
+            [],
+        ), None
 
     part_analysis, missing_parts = _analyze_parts(
         info, prime_map, needed_builds, owned, owned_finished, comp_to_bp=comp_to_bp
@@ -1623,6 +1643,8 @@ def analyze(
     * ``have_copy`` — player owns a finished copy.
     * ``buildable`` — all parts are owned, including sub-craft ingredients
       such as the finished Prime weapons consumed by akimbo variants.
+    * ``crafting`` — currently in the foundry; its blueprint and parts are
+      already committed, so it is not counted as owned or buildable.
     * ``partial`` — some parts owned, some missing.
     * Missing — zero parts owned (added to ``missing_primes`` list).
 
@@ -1644,6 +1666,7 @@ def analyze(
         else compute_extra_builds(prime_map, owned, owned_finished)
     )
     comp_to_bp = build_component_blueprint_map(recipes or {}, prime_map)
+    pending = set(parse_pending_recipes(inventory, recipes))
 
     results: list[ItemResult] = []
     missing_primes: list[MissingPrime] = []
@@ -1655,7 +1678,14 @@ def analyze(
             continue
 
         item_result, missing_prime = _classify_prime_item(
-            un, info, owned, owned_finished, extra_builds, prime_map, comp_to_bp=comp_to_bp
+            un,
+            info,
+            owned,
+            owned_finished,
+            extra_builds,
+            prime_map,
+            comp_to_bp=comp_to_bp,
+            pending=pending,
         )  # noqa: E501
 
         if item_result:

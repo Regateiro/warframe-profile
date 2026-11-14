@@ -177,9 +177,9 @@ weapon chains, mastery progression, missing mods, and cleanup. They use the
 same model functions and derived state as the CLI — including
 mastered-but-sold items — so both show the same recommendations.
 The **Refresh Inventory** button re-scans the game and reloads the page you
-are currently viewing; any expanded crafting results stay open. If the game
-isn't running, a dismissible notification explains why and the cached data
-is kept. The **Refresh Item DB** button next to it re-downloads and merges
+are currently viewing; any expanded crafting results stay open. A dismissible
+notification confirms a successful refresh. If the game isn't running, the
+notification explains why and the cached data is kept. The **Refresh Item DB** button next to it re-downloads and merges
 the item database (the same work as `python warframe.py update`) without
 touching your inventory.
 
@@ -219,6 +219,9 @@ The analysis shows:
   Prime weapons consumed by akimbo variants (e.g. two Magnus Prime for
   Akmagnus Prime). An item only counts as buildable when those sub-crafts
   can actually be made from owned parts.
+- **Crafting** — items currently in the foundry. Their blueprint and parts
+  are already committed, so they are counted separately rather than as
+  owned or buildable.
 - **Excess Prime parts** — per-item breakdown of missing and spare components.
 - **Ducat summary** — total ducats from surplus parts and from parts you
   need to keep for builds.

@@ -33,6 +33,29 @@ def test_build_owned_includes_pending_recipes():
     assert owned[normalize_path("/Lotus/Weapons/Tenno/KeratinosBlade")] == 1
 
 
+def test_build_owned_subtracts_pending_recipe_blueprint():
+    blueprint = "/Lotus/Types/Recipes/Weapons/CedoPrimeBlueprint"
+    result = "/Lotus/Weapons/Tenno/LongGuns/PrimeCedo/PrimeCedoWeapon"
+    inventory = {
+        "Recipes": [{"ItemType": blueprint, "ItemCount": 2}],
+        "PendingRecipes": [{"ItemType": blueprint}],
+    }
+    recipes = {blueprint: {"resultType": result}}
+
+    owned = build_owned(inventory, recipes)
+
+    assert owned[normalize_path(blueprint)] == 1
+    assert owned[normalize_path(result)] == 1
+
+
+def test_build_owned_never_goes_negative_for_pending_blueprints():
+    blueprint = "/Lotus/Types/Recipes/Weapons/CedoPrimeBlueprint"
+
+    owned = build_owned({"PendingRecipes": [{"ItemType": blueprint}]})
+
+    assert owned[normalize_path(blueprint)] == 0
+
+
 def test_build_mastered_set_normalises_windows_paths():
     inventory = {
         "XPInfo": [{"ItemType": "/Lotus\\Weapons\\Tenno\\LatoPrime", "XP": 0}],

@@ -697,7 +697,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 # bare error page; cached data stays untouched.
                 self._redirect(_with_notice(return_path, str(exc)))
                 return
-            self._redirect(return_path)
+            self._redirect(_with_notice(return_path, "Inventory refreshed.", error=False))
         elif path == "/refresh-items":
             if not self._is_same_origin():
                 self._html(403, "<h1>403 Forbidden</h1>")

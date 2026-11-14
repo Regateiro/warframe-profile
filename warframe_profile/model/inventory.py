@@ -517,6 +517,10 @@ def build_owned(
     - Equipment sections (Suits, LongGuns, Pistols, etc.)
     - PendingRecipes (items currently in the foundry, if *recipes* provided)
 
+    A blueprint consumed by a pending recipe is subtracted from the blueprint
+    count: the DE inventory keeps the spent blueprint in ``Recipes`` while the
+    item is in the foundry, which would otherwise count the same build twice.
+
     The resulting dict is the primary input to every analysis function.
 
     Keys are normalised paths (see :func:`~warframe_profile.analysis.normalize_path`).
@@ -532,6 +536,12 @@ def build_owned(
     for sect in EQUIPMENT_SECTIONS:
         for eq in inventory.get(sect, []):
             owned[normalize_path(eq.get("ItemType", ""))] += 1
+    # Pending recipes consume their blueprint even though the DE API still
+    # lists it under ``Recipes`` until the foundry item is claimed.
+    for pr in inventory.get("PendingRecipes", []):
+        bp_norm = normalize_path(pr.get("ItemType", ""))
+        if bp_norm and owned[bp_norm] > 0:
+            owned[bp_norm] -= 1
     # Include items currently being crafted in the foundry.
     pending = parse_pending_recipes(inventory, recipes)
     for k, v in pending.items():
