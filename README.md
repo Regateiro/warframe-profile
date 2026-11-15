@@ -234,10 +234,11 @@ In the web UI the **Ducats** tab shows the sell-for-ducats list.
 
 ### Mastery progression
 
-The web **Mastery** tab is split into **Ready to Build**, **Blueprint Ready**,
-**Never Touched**, and **In Progress** subtabs, with the progression summary
-shown above them. Items in the Blueprint Ready list link to the Craft tab for
-their full crafting breakdown.
+The web **Mastery** tab is split into **Unmastered Owned Items**, **Ready to
+Build**, **Owned Blueprints**, and **Missing Blueprints** subtabs, with the
+progression summary shown below them. Owned items with 0 XP count as
+unmastered owned items; items in the Owned Blueprints list link to the Craft
+tab for their full crafting breakdown.
 
 ### Crafting tree browser
 

@@ -516,28 +516,35 @@ def _reward_names_for_part(
     """Return the WFCD-style reward name(s) for a prime part.
 
     Handles the different naming conventions used by warframes, weapons,
-    sentinels, etc.
+    sentinels, etc. Part names that already include the parent item (nearly
+    all Prime parts) are used directly; bare names are prefixed with
+    *item_name*. Archwing display prefixes are removed because relic rewards
+    omit them.
     """
-    # If the part name is itself a full reward name (e.g. "Kavasa
-    # Prime Band" inside "Kavasa Prime Kubrow Collar"), return it
-    # directly — don't composite with the parent item name.
+    item_name = item_name.replace("<ARCHWING> ", "")
+    part_name = part_name.replace("<ARCHWING> ", "")
+
     if "Prime" in part_name and part_name != "Blueprint":
-        return [part_name]
+        base = part_name
+    elif part_name == "Blueprint":
+        base = f"{item_name} Blueprint"
+    else:
+        base = f"{item_name} {part_name}"
 
     if category in _FRAME_CATEGORIES:
-        if part_name == "Blueprint":
-            return [f"{item_name} Blueprint"]
-        return [f"{item_name} {part_name} Blueprint"]
+        # Warframe/Archwing component rewards carry a "Blueprint" suffix
+        # (e.g. "Valkyr Prime Chassis Blueprint"), even though the internal
+        # part name does not.
+        return [base] if base.endswith(" Blueprint") else [f"{base} Blueprint"]
 
     if category in _WEAPON_PART_CATEGORIES:
-        if part_name == "Blueprint":
-            return [f"{item_name} Blueprint"]
-        return [f"{item_name} {part_name}"]
+        return [base]
 
-    # Default: try both forms.
-    if part_name == "Blueprint":
-        return [f"{item_name} Blueprint"]
-    return [f"{item_name} {part_name}", f"{item_name} {part_name} Blueprint"]
+    # Unknown categories: accept either convention.
+    candidates = [base]
+    if not base.endswith(" Blueprint"):
+        candidates.append(f"{base} Blueprint")
+    return candidates
 
 
 def _process_relic_rewards(

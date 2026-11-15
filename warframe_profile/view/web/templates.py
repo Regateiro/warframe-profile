@@ -261,10 +261,10 @@ def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
 
 
 _MASTERY_SUBTABS = [
-    ("ready", "Ready to Build", "/mastery"),
-    ("blueprint", "Blueprint Ready", "/mastery/blueprint-ready"),
-    ("never", "Never Touched", "/mastery/never-touched"),
-    ("progress", "In Progress", "/mastery/in-progress"),
+    ("owned-items", "Unmastered Owned Items", "/mastery"),
+    ("ready", "Ready to Build", "/mastery/ready"),
+    ("owned-blueprints", "Owned Blueprints", "/mastery/owned-blueprints"),
+    ("missing-blueprints", "Missing Blueprints", "/mastery/missing-blueprints"),
 ]
 
 #: Preferred tab order for needed-drop categories; unknown categories follow
@@ -321,7 +321,7 @@ def render_home() -> str:
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
-  <li><strong>Mastery</strong> — Ready to build, blueprint, never-touched, and in-progress</li>
+  <li><strong>Mastery</strong> — Unmastered owned items, ready to build, and blueprint gaps</li>
   <li><strong>Mods</strong> — Missing mods grouped by in-game category</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
 </ul>
@@ -763,9 +763,9 @@ def render_weapon_chains(
 # ---------------------------------------------------------------------------
 # Mastery
 # ---------------------------------------------------------------------------
-# Mirrors the CLI mastery report, split into subtabs: Ready to Build (Prime
-# parts complete), Blueprint Ready, Never Touched (tiered), and In Progress
-# (tiered). The progression summary is shown above every subtab.
+# Mirrors the CLI mastery report, split into subtabs: Unmastered Owned Items
+# (tiered), Ready to Build (Prime parts complete), Owned Blueprints, and
+# Missing Blueprints (tiered). The summary is shown below the subtab bar.
 #
 
 
@@ -795,14 +795,14 @@ def _mastery_table(rows, link_craft: bool = False) -> str:
 
 
 def _mastery_summary(report) -> str:
-    """Render the shared progression summary shown above every subtab."""
-    blueprint_ready, never_touched, in_progress = report.sections
+    """Render the shared progression summary shown below every subtab."""
+    owned_items, owned_blueprints, missing_blueprints = report.sections
     return f"""<h2>Summary</h2>
 <p>{report.mastered:,} / {report.total:,} masterable items mastered
    ({report.percent}%)</p>
-<p>{blueprint_ready.count} blueprints ready
-   &middot; {never_touched.count} items never touched
-   &middot; {in_progress.count} in progress
+<p>{owned_items.count} unmastered owned
+   &middot; {owned_blueprints.count} owned blueprints
+   &middot; {missing_blueprints.count} missing blueprints
    &middot; {report.remaining} remaining</p>
 <p>~{report.total_mr:,} MR available from unmastered items</p>"""
 
@@ -840,6 +840,12 @@ def _mastery_page(report, active: str, title: str, body: str) -> str:
     return _page(title, content, "mastery")
 
 
+def render_mastery_owned_items(report) -> str:
+    """Render the Unmastered Owned Items subtab."""
+    body = f"<h2>Unmastered Owned Items</h2>{_mastery_section_body(report.sections[0])}"
+    return _mastery_page(report, "owned-items", "Mastery — Unmastered Owned Items", body)
+
+
 def render_mastery_ready(report, data) -> str:
     """Render the Ready to Build subtab (Prime items with all parts owned)."""
     buildable = sorted(
@@ -864,22 +870,16 @@ def render_mastery_ready(report, data) -> str:
     return _mastery_page(report, "ready", "Mastery — Ready to Build", body)
 
 
-def render_mastery_blueprint(report) -> str:
-    """Render the Blueprint Ready subtab."""
-    body = f"<h2>Blueprint Ready</h2>{_mastery_section_body(report.sections[0])}"
-    return _mastery_page(report, "blueprint", "Mastery — Blueprint Ready", body)
+def render_mastery_owned_blueprints(report) -> str:
+    """Render the Owned Blueprints subtab."""
+    body = f"<h2>Owned Blueprints</h2>{_mastery_section_body(report.sections[1])}"
+    return _mastery_page(report, "owned-blueprints", "Mastery — Owned Blueprints", body)
 
 
-def render_mastery_never_touched(report) -> str:
-    """Render the Never Touched subtab."""
-    body = f"<h2>Never Touched</h2>{_mastery_section_body(report.sections[1])}"
-    return _mastery_page(report, "never", "Mastery — Never Touched", body)
-
-
-def render_mastery_in_progress(report) -> str:
-    """Render the In Progress subtab."""
-    body = f"<h2>In Progress</h2>{_mastery_section_body(report.sections[2])}"
-    return _mastery_page(report, "progress", "Mastery — In Progress", body)
+def render_mastery_missing_blueprints(report) -> str:
+    """Render the Missing Blueprints subtab."""
+    body = f"<h2>Missing Blueprints</h2>{_mastery_section_body(report.sections[2])}"
+    return _mastery_page(report, "missing-blueprints", "Mastery — Missing Blueprints", body)
 
 
 # ---------------------------------------------------------------------------

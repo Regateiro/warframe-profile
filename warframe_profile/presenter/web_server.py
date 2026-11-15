@@ -73,9 +73,9 @@ from warframe_profile.view.web.templates import (
     render_craft_result,
     render_ducats,
     render_home,
-    render_mastery_blueprint,
-    render_mastery_in_progress,
-    render_mastery_never_touched,
+    render_mastery_missing_blueprints,
+    render_mastery_owned_blueprints,
+    render_mastery_owned_items,
     render_mastery_ready,
     render_mods,
     render_relics_needed,
@@ -560,20 +560,31 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _handle_mastery(self, subpath: str):
-        """Serve mastery progression sub-views (ready / blueprint / never / progress)."""
+        """Serve mastery sub-views (owned items, ready, blueprints)."""
         _ensure_mastery()
         assert _cache.mastery_report is not None  # guaranteed by _ensure_mastery
         report = _cache.mastery_report
-        if subpath == "/blueprint-ready":
-            self._html(200, render_mastery_blueprint(report))
-        elif subpath == "/never-touched":
-            self._html(200, render_mastery_never_touched(report))
-        elif subpath == "/in-progress":
-            self._html(200, render_mastery_in_progress(report))
-        else:
+
+        if subpath == "/ready":
             _ensure_analysis()
             assert _cache.analysis_result is not None  # guaranteed by _ensure_analysis
             self._html(200, render_mastery_ready(report, _cache.analysis_result))
+        elif subpath == "/owned-blueprints":
+            self._html(200, render_mastery_owned_blueprints(report))
+        elif subpath == "/missing-blueprints":
+            self._html(200, render_mastery_missing_blueprints(report))
+        elif subpath in ("/in-progress", "/blueprint-ready", "/never-touched"):
+            # Renamed sub-views; keep old bookmarks working.
+            legacy = {
+                "/in-progress": "/mastery",
+                "/blueprint-ready": "/mastery/owned-blueprints",
+                "/never-touched": "/mastery/missing-blueprints",
+            }
+            self._redirect(legacy[subpath])
+        elif subpath:
+            self._redirect("/mastery")
+        else:
+            self._html(200, render_mastery_owned_items(report))
 
     def _handle_mods(self):
         """Serve the missing-mods view."""
@@ -656,7 +667,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             /relics[/...]   → Safe-to-spam relics + needed drops by item type
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
-            /mastery[/...]  → Mastery (ready to build / blueprint / never touched / in progress)
+            /mastery[/...]  → Mastery (owned items / ready to build / blueprints)
             /mods           → Missing mods by in-game category
             /cleanup[/...]  → Inventory cleanup (rebuy / sell / excess)
         """

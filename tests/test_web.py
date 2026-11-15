@@ -27,7 +27,7 @@ from warframe_profile.view.web.templates import (
     render_craft_result,
     render_ducats,
     render_home,
-    render_mastery_blueprint,
+    render_mastery_owned_blueprints,
     render_mastery_ready,
     render_relics_needed,
     render_relics_safe,
@@ -247,18 +247,22 @@ def _mastery_report(blueprint_rows=None) -> MasteryReport:
         mastered=4,
         sections=[
             MasterySection(
-                header="BLUEPRINT READY",
+                header="UNMASTERED OWNED ITEMS",
+                desc="Owned or partially leveled",
+                group_by_tier=False,
+            ),
+            MasterySection(
+                header="OWNED BLUEPRINTS",
                 desc="Blueprint owned",
                 rows=blueprint_rows or [],
                 group_by_tier=False,
                 link_craft=True,
             ),
             MasterySection(
-                header="NEVER TOUCHED",
-                desc="No XP recorded",
+                header="MISSING BLUEPRINTS",
+                desc="Not owned",
                 group_by_tier=False,
             ),
-            MasterySection(header="IN PROGRESS", desc="Partial XP"),
         ],
         remaining=6,
         total_mr=60_000,
@@ -282,8 +286,8 @@ def test_render_mastery_ready_lists_buildable_primes():
     page = render_mastery_ready(_mastery_report(), AnalysisResult(items=[item]))
 
     assert "Akmagnus Prime" in page
-    assert "/mastery/blueprint-ready" in page
-    assert "/ducats/buildable" not in page
+    assert "/mastery/owned-blueprints" in page
+    assert 'class="active">Ready to Build' in page
     assert "Nothing is ready to build" not in page
 
 
@@ -291,7 +295,7 @@ def test_render_mastery_ready_shows_empty_state():
     page = render_mastery_ready(_mastery_report(), AnalysisResult())
 
     assert "Nothing is ready to build" in page
-    assert "/mastery/blueprint-ready" in page
+    assert "/mastery/owned-blueprints" in page
 
 
 def test_old_ducats_buildable_url_redirects_to_mastery():
@@ -438,28 +442,32 @@ def test_render_mastery_links_blueprint_rows_to_craft():
         mastered=0,
         sections=[
             MasterySection(
-                header="BLUEPRINT READY",
+                header="UNMASTERED OWNED ITEMS",
+                desc="Owned or partially leveled",
+                group_by_tier=False,
+            ),
+            MasterySection(
+                header="OWNED BLUEPRINTS",
                 desc="Blueprint owned",
                 rows=[blueprint],
                 group_by_tier=False,
                 link_craft=True,
             ),
             MasterySection(
-                header="NEVER TOUCHED",
-                desc="No XP recorded",
+                header="MISSING BLUEPRINTS",
+                desc="Not owned",
                 rows=[other],
                 group_by_tier=False,
             ),
-            MasterySection(header="IN PROGRESS", desc="Partial XP"),
         ],
     )
 
-    page = render_mastery_blueprint(report)
+    page = render_mastery_owned_blueprints(report)
 
     assert 'href="/craft?q=Silva+%26+Aegis+Prime"' in page
     assert "Silva &amp; Aegis Prime" in page
     assert 'href="/craft?q=Lato+Prime"' not in page
-    assert "/mastery/never-touched" in page
+    assert "/mastery/missing-blueprints" in page
 
 
 def test_render_craft_result_opens_exact_match():
