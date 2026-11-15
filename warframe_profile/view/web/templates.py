@@ -764,8 +764,9 @@ def render_weapon_chains(
 # Mastery
 # ---------------------------------------------------------------------------
 # Mirrors the CLI mastery report, split into subtabs: Unmastered Owned Items
-# (tiered), Ready to Build (Prime parts complete), Owned Blueprints, and
-# Missing Blueprints (tiered). The summary is shown below the subtab bar.
+# (tiered), Ready to Build, Owned Blueprints, and Missing Blueprints (tiered).
+# All lists are derived from masterable items. The summary is shown below the
+# subtab bar.
 #
 
 
@@ -796,11 +797,12 @@ def _mastery_table(rows, link_craft: bool = False) -> str:
 
 def _mastery_summary(report) -> str:
     """Render the shared progression summary shown below every subtab."""
-    owned_items, owned_blueprints, missing_blueprints = report.sections
+    owned_items, ready_to_build, owned_blueprints, missing_blueprints = report.sections
     return f"""<h2>Summary</h2>
 <p>{report.mastered:,} / {report.total:,} masterable items mastered
    ({report.percent}%)</p>
 <p>{owned_items.count} unmastered owned
+   &middot; {ready_to_build.count} ready to build
    &middot; {owned_blueprints.count} owned blueprints
    &middot; {missing_blueprints.count} missing blueprints
    &middot; {report.remaining} remaining</p>
@@ -846,39 +848,28 @@ def render_mastery_owned_items(report) -> str:
     return _mastery_page(report, "owned-items", "Mastery — Unmastered Owned Items", body)
 
 
-def render_mastery_ready(report, data) -> str:
-    """Render the Ready to Build subtab (Prime items with all parts owned)."""
-    buildable = sorted(
-        (i for i in data.items if i.status == "buildable"),
-        key=lambda i: (i.category, i.name),
-    )
-    if buildable:
-        rows = "".join(
-            f"<tr><td>{_esc(i.name)}</td><td>{_esc(i.category)}</td>"
-            f'<td class="num">{i.mastery_req or ""}</td></tr>'
-            for i in buildable
-        )
-        body = f"""<h2>Ready to Build</h2>
-<table><thead><tr><th>Name</th><th>Category</th><th class='num'>MR</th></tr></thead>
-<tbody>{rows}</tbody></table>
-<p class="dim">Every part and sub-craft ingredient is owned.</p>"""
+def render_mastery_ready(report) -> str:
+    """Render the Ready to Build subtab (masterable items craftable now)."""
+    section = report.sections[1]
+    if section.rows:
+        body = f"<h2>Ready to Build</h2>{_mastery_section_body(section)}"
     else:
         body = (
             '<div class="flash">Nothing is ready to build right now \u2014 '
-            "Prime items appear here when every part and sub-craft ingredient is owned.</div>"
+            "masterable items appear here when all blueprints and materials are owned.</div>"
         )
     return _mastery_page(report, "ready", "Mastery — Ready to Build", body)
 
 
 def render_mastery_owned_blueprints(report) -> str:
     """Render the Owned Blueprints subtab."""
-    body = f"<h2>Owned Blueprints</h2>{_mastery_section_body(report.sections[1])}"
+    body = f"<h2>Owned Blueprints</h2>{_mastery_section_body(report.sections[2])}"
     return _mastery_page(report, "owned-blueprints", "Mastery — Owned Blueprints", body)
 
 
 def render_mastery_missing_blueprints(report) -> str:
     """Render the Missing Blueprints subtab."""
-    body = f"<h2>Missing Blueprints</h2>{_mastery_section_body(report.sections[2])}"
+    body = f"<h2>Missing Blueprints</h2>{_mastery_section_body(report.sections[3])}"
     return _mastery_page(report, "missing-blueprints", "Mastery — Missing Blueprints", body)
 
 

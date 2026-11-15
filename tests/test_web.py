@@ -240,7 +240,7 @@ def test_render_ducats_shows_empty_state():
     assert 'class="tab-bar"' not in page
 
 
-def _mastery_report(blueprint_rows=None) -> MasteryReport:
+def _mastery_report(ready_rows=None, blueprint_rows=None) -> MasteryReport:
     """Minimal mastery report for subtab rendering tests."""
     return MasteryReport(
         total=10,
@@ -250,6 +250,13 @@ def _mastery_report(blueprint_rows=None) -> MasteryReport:
                 header="UNMASTERED OWNED ITEMS",
                 desc="Owned or partially leveled",
                 group_by_tier=False,
+            ),
+            MasterySection(
+                header="READY TO BUILD",
+                desc="All blueprints and materials owned",
+                rows=ready_rows or [],
+                group_by_tier=False,
+                link_craft=True,
             ),
             MasterySection(
                 header="OWNED BLUEPRINTS",
@@ -269,30 +276,25 @@ def _mastery_report(blueprint_rows=None) -> MasteryReport:
     )
 
 
-def test_render_mastery_ready_lists_buildable_primes():
-    item = ItemResult(
-        name="Akmagnus Prime",
+def test_render_mastery_ready_lists_craftable_items():
+    item = MasteryRow(
+        name="Riot-848",
         category="Secondary",
-        status="buildable",
-        needed_builds=1,
-        extra_builds=0,
-        mastery_req=14,
-        has_copy=False,
-        parts=[],
-        can_build=True,
-        missing_parts=0,
+        mr=14,
+        source="Market",
     )
 
-    page = render_mastery_ready(_mastery_report(), AnalysisResult(items=[item]))
+    page = render_mastery_ready(_mastery_report(ready_rows=[item]))
 
-    assert "Akmagnus Prime" in page
+    assert "Riot-848" in page
+    assert 'href="/craft?q=Riot-848"' in page
     assert "/mastery/owned-blueprints" in page
     assert 'class="active">Ready to Build' in page
     assert "Nothing is ready to build" not in page
 
 
 def test_render_mastery_ready_shows_empty_state():
-    page = render_mastery_ready(_mastery_report(), AnalysisResult())
+    page = render_mastery_ready(_mastery_report())
 
     assert "Nothing is ready to build" in page
     assert "/mastery/owned-blueprints" in page
@@ -445,6 +447,12 @@ def test_render_mastery_links_blueprint_rows_to_craft():
                 header="UNMASTERED OWNED ITEMS",
                 desc="Owned or partially leveled",
                 group_by_tier=False,
+            ),
+            MasterySection(
+                header="READY TO BUILD",
+                desc="All blueprints and materials owned",
+                group_by_tier=False,
+                link_craft=True,
             ),
             MasterySection(
                 header="OWNED BLUEPRINTS",

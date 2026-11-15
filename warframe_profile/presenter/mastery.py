@@ -11,8 +11,8 @@ Flow:
     3. For each masterable item, classify as:
        - Mastered: cumulative XP >= expected max for its type.
        - In progress: owned (including 0 XP) or partially leveled.
-       - Unowned: not owned; split into owned-blueprint and missing-blueprint
-         groups.
+       - Unowned: not owned; split into ready-to-build, owned-blueprint,
+         and missing-blueprint groups using the full crafting tree.
     4. Group unmastered items by farming difficulty tier (1-7).
     5. Print the report with MR estimates and acquisition sources.
 """
@@ -21,7 +21,14 @@ from dataclasses import dataclass, field
 
 from prettytable import PrettyTable, TableStyle
 
-from warframe_profile.model.craft_model import build_recipes_by_result
+from warframe_profile.model.craft_model import (
+    add_missing_blueprint_requirement,
+    build_items_by_un,
+    build_recipes_by_result,
+    is_blueprint_un,
+    postprocess_craft_plan,
+    resolve_tree,
+)
 from warframe_profile.model.inventory import (
     EQUIPMENT_SECTIONS,
     ExportDB,
@@ -86,15 +93,6 @@ _MODULAR_SECTIONS: tuple[str, ...] = (
     "Melee",
     "MoaPets",
     "KubrowPets",
-)
-
-#: Path prefixes that identify resource/material ingredients (skipped in
-#: blueprint-readiness checks).
-_RESOURCE_PATH_PREFIXES: tuple[str, ...] = (
-    "/Lotus/Types/Items/",
-    "/Lotus/Types/Gameplay/",
-    "/Lotus/Types/Game/",
-    "/Lotus/Types/Keys/",
 )
 
 # ---------------------------------------------------------------------------
@@ -527,12 +525,13 @@ def _filter_masterable_items(db):
     return masterable
 
 
-def _build_owned_items(inv: dict, recipes: dict) -> set[str]:
-    """Return normalised paths of built/owned items.
+def _build_modular_owned(inv: dict, recipes: dict) -> set[str]:
+    """Return built-item paths that ``build_owned`` does not already cover.
 
-    Owned means the item is in an equipment/modular/pet section (including
-    modular parts of an assembled item) or currently being crafted. Crafting
-    components in ``MiscItems`` and blueprints in ``Recipes`` are excluded.
+    Equipment, pet, vehicle, and assembled modular sections are included
+    (with their ``ModularParts``), plus items currently being crafted. This
+    supplements ``build_owned`` so assembled modular items count as owned
+    even when their masterable path is not an equipment ``ItemType``.
     """
     owned: set[str] = set()
     for section in _OWNED_SECTIONS:
@@ -551,7 +550,8 @@ def _classify_mastery_item(
     ever_leveled: set,
     xp_by_path: dict[str, int],
     modular_features: dict[str, int | None],
-    owned_items: set[str],
+    owned: dict,
+    modular_owned: set[str],
 ) -> tuple[str, int]:  # ("unowned"|"in_progress"|"mastered", tier_index)
     """Classify one masterable item and return ``(bucket, tier_index)``.
 
@@ -559,7 +559,8 @@ def _classify_mastery_item(
     can fall into the blueprint/unowned buckets.
     """
     un = item["uniqueName"].lower()
-    owned_now = normalize_path(item["uniqueName"]) in owned_items
+    norm = normalize_path(item["uniqueName"])
+    owned_now = owned.get(norm, 0) > 0 or norm in modular_owned
 
     if un not in ever_leveled:
         if owned_now:
@@ -576,48 +577,71 @@ def _classify_mastery_item(
     return "in_progress", _tier_index(item)
 
 
-def _has_blueprint(
+def _craft_requirements(
     item: dict,
-    owned: dict,
+    items_by_un: dict,
     recipes_by_result: dict,
-) -> bool:
-    """Return True if the player owns all required blueprints for *item*.
+    owned: dict,
+    loc_dict: dict,
+) -> dict | None:
+    """Return the full crafting requirements for *item*, or None if absent.
 
-    Checks the main blueprint and, for each ingredient in the recipe,
-    verifies that any non-material component (not under ``/Lotus/Types/Items/``)
-    is present in the player's inventory in sufficient quantity.
+    The plan covers the whole tree: intermediate components are decomposed
+    into raw materials and every required blueprint is included when missing.
     """
-    un = item.get("uniqueName", "").lower()
-    recipe = recipes_by_result.get(un)
-    if not recipe:
-        return False
-    bp_key = recipe.get("_recipeKey", "")
-    if not bp_key:
-        return False
-    if owned.get(normalize_path(bp_key), 0) <= 0:
-        return False
+    un = item.get("uniqueName", "")
+    if un.lower() not in recipes_by_result:
+        return None
 
-    for ing in recipe.get("ingredients") or []:
-        ing_type = ing.get("ItemType", "")
-        ing_count = ing.get("ItemCount", 1)
-        # Skip resources/materials — user is OK farming those
-        if ing_type.startswith(_RESOURCE_PATH_PREFIXES):
-            continue
-        if owned.get(normalize_path(ing_type), 0) < ing_count:
-            return False
-    return True
+    requirements, craftables = resolve_tree(
+        un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5
+    )
+    add_missing_blueprint_requirement(
+        un,
+        item.get("name", ""),
+        requirements,
+        owned,
+        recipes_by_result,
+    )
+    return postprocess_craft_plan(
+        requirements, craftables, owned, items_by_un, recipes_by_result, loc_dict
+    )
+
+
+def _requirements_ready(requirements: dict) -> bool:
+    """Whether every blueprint and material in *requirements* is owned."""
+    return bool(requirements) and all(v["owned"] >= v["quantity"] for v in requirements.values())
+
+
+def _missing_any_blueprint(requirements: dict) -> bool:
+    """Whether the plan is missing at least one required blueprint."""
+    return any(
+        is_blueprint_un(key) and value["owned"] < value["quantity"]
+        for key, value in requirements.items()
+    )
 
 
 def analyze_mastery(
     db: ExportDB,
     inv: dict,
-) -> tuple[int, int, list[tuple[dict, int]], list[tuple[dict, int]], list[tuple[dict, int]]]:
+) -> tuple[
+    int,
+    int,
+    list[tuple[dict, int]],
+    list[tuple[dict, int]],
+    list[tuple[dict, int]],
+    list[tuple[dict, int]],
+]:
     """Cross-reference player progress against the masterable item list.
 
     Returns:
-        ``(total, mastered, missing_blueprints, in_progress, owned_blueprints)``.
-        Unowned items with an owned blueprint are *owned_blueprints*; other
-        unowned items are *missing_blueprints*. Owned items at 0 XP count as
+        ``(total, mastered, ready_to_build, owned_blueprints,
+        missing_blueprints, in_progress)``.
+
+        Unowned items are categorized by the full crafting tree: *ready* when
+        every blueprint and material is owned, *owned_blueprints* when all
+        required blueprints are owned but materials are missing, and
+        *missing_blueprints* otherwise. Owned items at 0 XP count as
         *in_progress* alongside partially leveled ones.
     """
     ever_leveled = _build_ever_leveled(inv)
@@ -626,8 +650,10 @@ def analyze_mastery(
     masterable = _filter_masterable_items(db)
 
     owned = build_owned(inv, db.recipes)
-    owned_items = _build_owned_items(inv, db.recipes)
+    modular_owned = _build_modular_owned(inv, db.recipes)
     recipes_by_result = build_recipes_by_result(db.raw)
+    items_by_un = build_items_by_un(db.raw)
+    loc_dict = db.raw.get("dict", {})
 
     mastered = 0
     unowned: list[tuple[dict, int]] = []
@@ -635,7 +661,7 @@ def analyze_mastery(
 
     for item in masterable:
         bucket, t_idx = _classify_mastery_item(
-            item, ever_leveled, xp_by_path, modular_features, owned_items
+            item, ever_leveled, xp_by_path, modular_features, owned, modular_owned
         )
         if bucket == "unowned":
             unowned.append((item, t_idx))
@@ -644,19 +670,31 @@ def analyze_mastery(
         else:
             mastered += 1
 
+    ready_to_build: list[tuple[dict, int]] = []
     owned_blueprints: list[tuple[dict, int]] = []
     missing_blueprints: list[tuple[dict, int]] = []
     for pair in unowned:
-        if _has_blueprint(pair[0], owned, recipes_by_result):
+        requirements = _craft_requirements(pair[0], items_by_un, recipes_by_result, owned, loc_dict)
+        if requirements is not None and _requirements_ready(requirements):
+            ready_to_build.append(pair)
+        elif requirements is not None and not _missing_any_blueprint(requirements):
             owned_blueprints.append(pair)
         else:
             missing_blueprints.append(pair)
 
+    ready_to_build.sort(key=lambda pair: pair[0].get("name") or "")
     owned_blueprints.sort(key=lambda pair: pair[0].get("name") or "")
     missing_blueprints.sort(key=lambda pair: (pair[1], pair[0].get("name") or ""))
     in_progress.sort(key=lambda pair: (pair[1], pair[0].get("name") or ""))
 
-    return len(masterable), mastered, missing_blueprints, in_progress, owned_blueprints
+    return (
+        len(masterable),
+        mastered,
+        ready_to_build,
+        owned_blueprints,
+        missing_blueprints,
+        in_progress,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -762,8 +800,17 @@ def _mastery_tier_groups(items: list[tuple[dict, int]]) -> list[MasteryTierGroup
 
 def build_mastery_report(db: ExportDB, inv: dict) -> MasteryReport:
     """Build the full mastery report shared by ``mastery`` and the web UI."""
-    total, mastered, missing_blueprints, in_progress, owned_blueprints = analyze_mastery(db, inv)
-    remaining = len(missing_blueprints) + len(in_progress) + len(owned_blueprints)
+    (
+        total,
+        mastered,
+        ready_to_build,
+        owned_blueprints,
+        missing_blueprints,
+        in_progress,
+    ) = analyze_mastery(db, inv)
+    remaining = (
+        len(ready_to_build) + len(owned_blueprints) + len(missing_blueprints) + len(in_progress)
+    )
     sections = [
         MasterySection(
             header="UNMASTERED OWNED ITEMS",
@@ -772,15 +819,22 @@ def build_mastery_report(db: ExportDB, inv: dict) -> MasteryReport:
             tier_groups=_mastery_tier_groups(in_progress),
         ),
         MasterySection(
+            header="READY TO BUILD",
+            desc="All blueprints and materials owned — craft now",
+            rows=_mastery_rows(ready_to_build),
+            group_by_tier=False,
+            link_craft=True,
+        ),
+        MasterySection(
             header="OWNED BLUEPRINTS",
-            desc="Blueprint owned — farm materials to build",
+            desc="All blueprints owned — farm materials to build",
             rows=_mastery_rows(owned_blueprints),
             group_by_tier=False,
             link_craft=True,
         ),
         MasterySection(
             header="MISSING BLUEPRINTS",
-            desc="Not owned — no blueprint",
+            desc="Not owned — missing blueprint",
             rows=_mastery_rows(missing_blueprints),
             tier_groups=_mastery_tier_groups(missing_blueprints),
         ),
@@ -861,8 +915,9 @@ def _print_mastery_section(section: MasterySection) -> None:
 def print_report(report: MasteryReport) -> None:
     """Print the full mastery progression report."""
     owned_items = report.sections[0]
-    owned_blueprints = report.sections[1]
-    missing_blueprints = report.sections[2]
+    ready_to_build = report.sections[1]
+    owned_blueprints = report.sections[2]
+    missing_blueprints = report.sections[3]
 
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
@@ -870,6 +925,7 @@ def print_report(report: MasteryReport) -> None:
     print(f"  {report.mastered} / {report.total} masterable items mastered ({report.percent}%)")
     print(
         f"  {owned_items.count} unmastered owned"
+        f"  {ready_to_build.count} ready to build"
         f"  {owned_blueprints.count} owned blueprints"
         f"  {missing_blueprints.count} missing blueprints"
         f"  {report.remaining} remaining"

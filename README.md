@@ -236,9 +236,11 @@ In the web UI the **Ducats** tab shows the sell-for-ducats list.
 
 The web **Mastery** tab is split into **Unmastered Owned Items**, **Ready to
 Build**, **Owned Blueprints**, and **Missing Blueprints** subtabs, with the
-progression summary shown below them. Owned items with 0 XP count as
-unmastered owned items; items in the Owned Blueprints list link to the Craft
-tab for their full crafting breakdown.
+progression summary shown below them. All four are driven by masterable items,
+not just Primes: Ready to Build means every blueprint and material in the
+crafting tree is owned; Owned Blueprints means the blueprints are owned but
+materials are still missing. Owned items with 0 XP count as unmastered owned
+items, and item names link to the Craft tab for their full breakdown.
 
 ### Crafting tree browser
 

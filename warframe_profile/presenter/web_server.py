@@ -566,9 +566,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         report = _cache.mastery_report
 
         if subpath == "/ready":
-            _ensure_analysis()
-            assert _cache.analysis_result is not None  # guaranteed by _ensure_analysis
-            self._html(200, render_mastery_ready(report, _cache.analysis_result))
+            self._html(200, render_mastery_ready(report))
         elif subpath == "/owned-blueprints":
             self._html(200, render_mastery_owned_blueprints(report))
         elif subpath == "/missing-blueprints":
