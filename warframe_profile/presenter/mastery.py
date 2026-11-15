@@ -525,24 +525,47 @@ def _filter_masterable_items(db):
     return masterable
 
 
-def _build_modular_owned(inv: dict, recipes: dict) -> set[str]:
-    """Return built-item paths that ``build_owned`` does not already cover.
+#: Masterable item types that are modular components; they only count as
+#: owned when an assembled item lists them in ``ModularParts``.
+_MODULAR_COMPONENT_TYPES: frozenset[str] = frozenset(
+    {"K-Drive Component", "Zaw Component", "Kitgun Component", "Amp"}
+)
 
-    Equipment, pet, vehicle, and assembled modular sections are included
-    (with their ``ModularParts``), plus items currently being crafted. This
-    supplements ``build_owned`` so assembled modular items count as owned
-    even when their masterable path is not an equipment ``ItemType``.
+
+def _is_modular_component(item: dict) -> bool:
+    """Whether *item* is a modular part rather than an assembled item."""
+    if item.get("type") in _MODULAR_COMPONENT_TYPES:
+        return True
+    return "PetPart" in item.get("uniqueName", "")
+
+
+def _build_owned_items(inv: dict, recipes: dict) -> tuple[set[str], set[str]]:
+    """Return ``(owned_item_paths, assembled_modular_part_paths)``.
+
+    Item paths come from equipment/modular/pet/vehicle sections and pending
+    foundry results. ``MiscItems`` is deliberately excluded: loose modular
+    components (e.g. an unassembled K-Drive deck) are not the masterable item.
     """
     owned: set[str] = set()
+    assembled_parts: set[str] = set()
     for section in _OWNED_SECTIONS:
         for entry in inv.get(section, []):
             un = entry.get("ItemType", "")
             if un:
                 owned.add(normalize_path(un))
             for part in entry.get("ModularParts") or []:
-                owned.add(normalize_path(part))
+                assembled_parts.add(normalize_path(part))
     owned.update(parse_pending_recipes(inv, recipes))
-    return owned
+    return owned, assembled_parts
+
+
+def _owns_root_blueprint(item: dict, recipes_by_result: dict, owned: dict) -> bool:
+    """Whether the blueprint required to craft *item* itself is owned."""
+    recipe = recipes_by_result.get(item.get("uniqueName", "").lower())
+    if not recipe:
+        return False
+    bp_key = recipe.get("_recipeKey", "")
+    return bool(bp_key) and owned.get(normalize_path(bp_key), 0) > 0
 
 
 def _classify_mastery_item(
@@ -550,17 +573,21 @@ def _classify_mastery_item(
     ever_leveled: set,
     xp_by_path: dict[str, int],
     modular_features: dict[str, int | None],
-    owned: dict,
-    modular_owned: set[str],
+    owned_items: set[str],
+    assembled_parts: set[str],
 ) -> tuple[str, int]:  # ("unowned"|"in_progress"|"mastered", tier_index)
     """Classify one masterable item and return ``(bucket, tier_index)``.
 
     An item the player owns is "in progress" even at 0 XP; only unowned items
-    can fall into the blueprint/unowned buckets.
+    can fall into the blueprint/unowned buckets. Modular components count as
+    owned only when an assembled item's ``ModularParts`` references them.
     """
     un = item["uniqueName"].lower()
     norm = normalize_path(item["uniqueName"])
-    owned_now = owned.get(norm, 0) > 0 or norm in modular_owned
+    if _is_modular_component(item):
+        owned_now = norm in assembled_parts
+    else:
+        owned_now = norm in owned_items
 
     if un not in ever_leveled:
         if owned_now:
@@ -650,7 +677,7 @@ def analyze_mastery(
     masterable = _filter_masterable_items(db)
 
     owned = build_owned(inv, db.recipes)
-    modular_owned = _build_modular_owned(inv, db.recipes)
+    owned_items, assembled_parts = _build_owned_items(inv, db.recipes)
     recipes_by_result = build_recipes_by_result(db.raw)
     items_by_un = build_items_by_un(db.raw)
     loc_dict = db.raw.get("dict", {})
@@ -661,7 +688,12 @@ def analyze_mastery(
 
     for item in masterable:
         bucket, t_idx = _classify_mastery_item(
-            item, ever_leveled, xp_by_path, modular_features, owned, modular_owned
+            item,
+            ever_leveled,
+            xp_by_path,
+            modular_features,
+            owned_items,
+            assembled_parts,
         )
         if bucket == "unowned":
             unowned.append((item, t_idx))
@@ -674,6 +706,15 @@ def analyze_mastery(
     owned_blueprints: list[tuple[dict, int]] = []
     missing_blueprints: list[tuple[dict, int]] = []
     for pair in unowned:
+        if _is_modular_component(pair[0]):
+            # Loose modular components are not assembled items; the generic
+            # recipe does not describe assembling the finished modular item.
+            if _owns_root_blueprint(pair[0], recipes_by_result, owned):
+                owned_blueprints.append(pair)
+            else:
+                missing_blueprints.append(pair)
+            continue
+
         requirements = _craft_requirements(pair[0], items_by_un, recipes_by_result, owned, loc_dict)
         if requirements is not None and _requirements_ready(requirements):
             ready_to_build.append(pair)

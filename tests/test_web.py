@@ -300,29 +300,17 @@ def test_render_mastery_ready_shows_empty_state():
     assert "/mastery/owned-blueprints" in page
 
 
-def test_old_ducats_buildable_url_redirects_to_mastery():
+def test_ducats_rejects_removed_subpaths():
     from warframe_profile.presenter import web_server
 
-    calls = []
+    codes = []
     handler = _bare_handler(web_server)
-    handler._redirect = lambda path: calls.append(path)
+    handler._html = lambda code, page: codes.append(code)
 
     web_server.WarframeHandler._handle_ducats(handler, "/buildable")
-
-    assert calls == ["/mastery"]
-
-
-def test_old_ducats_subviews_redirect_to_ducats():
-    from warframe_profile.presenter import web_server
-
-    calls = []
-    handler = _bare_handler(web_server)
-    handler._redirect = lambda path: calls.append(path)
-
     web_server.WarframeHandler._handle_ducats(handler, "/sell")
-    web_server.WarframeHandler._handle_ducats(handler, "/excess")
 
-    assert calls == ["/ducats", "/ducats"]
+    assert codes == [404, 404]
 
 
 def test_render_relics_safe_escapes_relic_names():
@@ -385,7 +373,7 @@ def test_render_relics_needed_filters_by_category():
     assert 'class="active">Warframes' in page
 
 
-def test_relics_route_defaults_to_safe_and_redirects_old_paths(monkeypatch):
+def test_relics_route_defaults_to_safe_and_rejects_unsupported_paths(monkeypatch):
     from warframe_profile.presenter import web_server
 
     needed = [_needed_part("Ash Prime Chassis", "Ash Prime", "Warframes")]
@@ -402,19 +390,37 @@ def test_relics_route_defaults_to_safe_and_redirects_old_paths(monkeypatch):
     calls = []
     handler = _bare_handler(web_server)
     handler._html = lambda code, page: calls.append((code, page))
-    handler._redirect = lambda path: calls.append(("redirect", path))
 
     web_server.WarframeHandler._handle_relics(handler, "")
     web_server.WarframeHandler._handle_relics(handler, "/safe")
     web_server.WarframeHandler._handle_relics(handler, "/needed")
+    web_server.WarframeHandler._handle_relics(handler, "/needed/unknown")
     web_server.WarframeHandler._handle_relics(handler, "/needed/warframes")
 
+    not_found = (404, "<h1>404 Not Found</h1>")
     assert calls == [
         (200, "safe-page"),
-        ("redirect", "/relics"),
-        ("redirect", "/relics/needed/warframes"),
+        not_found,
+        not_found,
+        not_found,
         (200, "needed-warframes"),
     ]
+
+
+def test_mastery_rejects_legacy_paths(monkeypatch):
+    from warframe_profile.presenter import web_server
+
+    monkeypatch.setattr(web_server, "_ensure_mastery", lambda: None)
+    monkeypatch.setattr(web_server._cache, "mastery_report", object())
+
+    codes = []
+    handler = _bare_handler(web_server)
+    handler._html = lambda code, page: codes.append(code)
+
+    for path in ("/in-progress", "/blueprint-ready", "/never-touched", "/unknown"):
+        web_server.WarframeHandler._handle_mastery(handler, path)
+
+    assert codes == [404, 404, 404, 404]
 
 
 def test_render_cleanup_rebuy_escapes_equipment_names():

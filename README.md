@@ -26,6 +26,11 @@ Additional highlights:
 - **Colour-coded output** — green / yellow / red terminal output for crafting
   tree browser.
 
+## Documentation
+
+- [Web UI design](docs/web-design.md) — page layout, routes, and the logic
+  behind every tab and subtab.
+
 ## Requirements
 
 - Python 3.10+

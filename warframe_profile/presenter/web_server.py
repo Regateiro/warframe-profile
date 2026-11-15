@@ -456,6 +456,10 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", path)
         self.end_headers()
 
+    def _not_found(self):
+        """Send the standard 404 response."""
+        self._html(404, "<h1>404 Not Found</h1>")
+
     def _return_path(self) -> str:
         """Return a safe same-site path to return to after a refresh."""
         referer = self.headers.get("Referer", "")
@@ -486,13 +490,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_ducats(self, subpath: str):
         """Serve the single Ducats view (sell-for-ducats list)."""
-        if subpath == "/buildable":
-            # Moved to the Mastery tab; keep old bookmarks working.
-            self._redirect("/mastery")
-            return
         if subpath:
-            # Missing/Excess/Sell sub-views were removed.
-            self._redirect("/ducats")
+            self._not_found()
             return
         _ensure_analysis()
         self._html(200, render_ducats(_cache.analysis_result))
@@ -500,21 +499,18 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
     def _handle_relics(self, subpath: str):
         """Serve relic views: Safe to Spam default, then needed item types."""
         _ensure_relics()
-        tabs = relic_category_tabs(_cache.needed_drops)
-        if subpath == "/safe":
-            self._redirect("/relics")
-            return
-        if subpath == "/needed":
-            self._redirect(tabs[1][2] if len(tabs) > 1 else "/relics")
+        if not subpath:
+            self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
             return
         if subpath.startswith("/needed/"):
             slug = subpath.removeprefix("/needed/")
+            tabs = relic_category_tabs(_cache.needed_drops)
             if any(key == slug for key, _, _ in tabs):
                 self._html(200, render_relics_needed(_cache.needed_drops, slug))
             else:
-                self._redirect("/relics")
+                self._not_found()
             return
-        self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
+        self._not_found()
 
     def _handle_craft(self, query: str):
         """Serve craft search results or the empty search form."""
@@ -571,16 +567,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             self._html(200, render_mastery_owned_blueprints(report))
         elif subpath == "/missing-blueprints":
             self._html(200, render_mastery_missing_blueprints(report))
-        elif subpath in ("/in-progress", "/blueprint-ready", "/never-touched"):
-            # Renamed sub-views; keep old bookmarks working.
-            legacy = {
-                "/in-progress": "/mastery",
-                "/blueprint-ready": "/mastery/owned-blueprints",
-                "/never-touched": "/mastery/missing-blueprints",
-            }
-            self._redirect(legacy[subpath])
         elif subpath:
-            self._redirect("/mastery")
+            self._not_found()
         else:
             self._html(200, render_mastery_owned_items(report))
 
@@ -649,6 +637,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         elif subpath == "/excess":
             _ensure_excess()
             self._html(200, render_cleanup_excess(_cache.excess_items))
+        elif subpath:
+            self._not_found()
         else:
             _ensure_analysis()
             self._html(
@@ -691,7 +681,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             elif path.startswith("/cleanup"):
                 self._handle_cleanup(path.removeprefix("/cleanup"))
             else:
-                self._html(404, "<h1>404 Not Found</h1>")
+                self._not_found()
         except Exception as e:
             # Keep the full traceback in the console; never send internals to
             # the browser (the server can be bound to a LAN address).
@@ -725,7 +715,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._handle_refresh_items()
         else:
-            self._html(404, "<h1>404 Not Found</h1>")
+            self._not_found()
 
 
 # ---------------------------------------------------------------------------

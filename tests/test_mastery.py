@@ -28,6 +28,7 @@ _KDRIVE_ITEM = {
     ),
     "name": "Bad Baby",
     "category": "Misc",
+    "type": "K-Drive Component",
     "masterable": True,
     "components": [],
     "tags": [],
@@ -122,7 +123,7 @@ def test_report_sections_use_new_names_and_order():
     assert [row.name for row in report.sections[0].rows] == ["Cedo Prime"]
 
 
-def test_loose_modular_component_counts_as_owned():
+def test_loose_modular_component_is_not_owned():
     db = SimpleNamespace(
         items=[_KDRIVE_ITEM],
         raw={"items": [_KDRIVE_ITEM], "recipes": {}},
@@ -133,9 +134,37 @@ def test_loose_modular_component_counts_as_owned():
     _, _, ready, owned_blueprints, missing, in_progress = analyze_mastery(db, inventory)
 
     assert ready == []
-    assert missing == []
+    assert in_progress == []
     assert owned_blueprints == []
-    assert [item["name"] for item, _ in in_progress] == ["Bad Baby"]
+    assert [item["name"] for item, _ in missing] == ["Bad Baby"]
+
+
+def test_modular_component_with_blueprint_is_owned_blueprints():
+    blueprint = f"{_KDRIVE_ITEM['uniqueName']}Blueprint"
+    recipes = {
+        blueprint: {
+            "resultType": _KDRIVE_ITEM["uniqueName"],
+            "ingredients": [],
+            "num": 1,
+            "consumeOnUse": True,
+        }
+    }
+    db = SimpleNamespace(
+        items=[_KDRIVE_ITEM],
+        raw={"items": [_KDRIVE_ITEM], "recipes": recipes},
+        recipes=recipes,
+    )
+    inventory = {
+        "MiscItems": [{"ItemType": _KDRIVE_ITEM["uniqueName"], "ItemCount": 1}],
+        "Recipes": [{"ItemType": blueprint, "ItemCount": 1}],
+    }
+
+    _, _, ready, owned_blueprints, missing, in_progress = analyze_mastery(db, inventory)
+
+    assert ready == []
+    assert in_progress == []
+    assert missing == []
+    assert [item["name"] for item, _ in owned_blueprints] == ["Bad Baby"]
 
 
 def test_assembled_modular_parts_count_as_owned():

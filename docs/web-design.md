@@ -1,0 +1,512 @@
+# Warframe Profile — Web UI Design
+
+**Status:** Draft for validation  
+**Scope:** The `serve` web UI: page layout, routes, and the logic behind every
+table and subtab.  
+**Audience:** Maintainer/design reviewer. This document describes current
+behaviour; it is not a roadmap.
+
+> Named items in examples are illustrative only. Inventory-dependent lists
+> change as items are built, mastered, or sold; do not treat a specific item
+> as permanent expected state.
+
+---
+
+## 1. Architecture at a glance
+
+```
+Browser
+  │  GET /… , POST /refresh | /refresh-items
+  ▼
+WarframeHandler (http.server, threaded)
+  │  validates POST origin, routes path
+  ▼
+DataCache (process singleton)
+  │  db, inventory, owned, mastered
+  │  lazy analysis caches (prime map, ducats, relics, mastery, mods, …)
+  ▼
+Presenters (model → dataclasses)      View templates (HTML)
+  analysis.py / craft_model.py           templates.py
+  mastery.py / missing_mods.py           (server-side rendering)
+```
+
+Key points:
+
+- The UI is **server-rendered HTML**; there is no client-side framework or API.
+- The item database and inventory are loaded once at startup into `DataCache`.
+- Expensive analyses are computed **lazily** on first request and cached until
+  the inventory or item database is refreshed.
+- All game-data text is HTML-escaped before interpolation.
+- The server binds to `127.0.0.1` by default and has no authentication.
+
+### Startup
+
+`warframe.py serve` loads:
+
+1. The merged item export (`export_db.json`) and builds static indices:
+   `items_by_un`, `recipes_by_result`, localization dictionary, `by_name`.
+2. The inventory (`inventory.json`, or a live scan when `--refresh` is used)
+   and builds `owned` and the mastered set.
+
+### Refresh lifecycle
+
+| Action | What happens |
+|---|---|
+| **Refresh Inventory** (`POST /refresh`) | Re-scans/fetches the inventory, rebuilds `owned`/mastered, drops all lazy analysis caches, redirects back to the current page. Success shows `notice=…`; failure shows `refresh_error=…` and keeps cached data. |
+| **Refresh Item DB** (`POST /refresh-items`) | Runs the `update` download/merge, reloads the database and static indices, rebuilds inventory-derived state, drops lazy caches, redirects back with a notice. A lock prevents concurrent database refreshes. |
+
+Both POSTs reject cross-origin browser requests via an Origin/Referer check;
+clients that send neither header (e.g. `curl`) are allowed.
+
+### Shared page shell
+
+- Dark GitHub-style theme.
+- Top navigation: **Home, Ducats, Relics, Craft, Weapon Chains, Mastery, Mods,
+  Cleanup**, plus the two refresh buttons.
+- Pages with multiple views use a horizontal subtab bar.
+- Query-string notifications (`notice`, `refresh_error`) render as a dismissible
+  toast and are removed from the URL.
+- `<details>` expansion state is saved in `sessionStorage` and restored after an
+  inventory refresh, so expanded crafting trees stay open.
+
+---
+
+## 2. Route map
+
+| Route | View |
+|---|---|
+| `/` | Home |
+| `/ducats` | Ducats — sell list |
+| `/relics` | Relics — **Safe to Spam** (default) |
+| `/relics/needed/<category-slug>` | Needed drops for one item type |
+| `/craft?q=…` | Craft search / results |
+| `/weapon-chains` | Weapon upgrade chains |
+| `/mastery` | Mastery — **Unmastered Owned Items** (default) |
+| `/mastery/ready` | Mastery — Ready to Build |
+| `/mastery/owned-blueprints` | Mastery — Owned Blueprints |
+| `/mastery/missing-blueprints` | Mastery — Missing Blueprints |
+| `/mods` | Missing mods |
+| `/cleanup` | Cleanup — **Re-Buyable** (default) |
+| `/cleanup/sell` | Cleanup — Prime Variant |
+| `/cleanup/excess` | Cleanup — Excess |
+
+There is no legacy-URL compatibility layer: unsupported subpaths return **404**.
+That includes removed URLs such as `/ducats/sell`, `/relics/safe`,
+`/mastery/in-progress`, and unknown relic category slugs. All links are
+app-internal, so these paths are not needed.
+
+Unexpected server exceptions return a generic 500 page (traceback stays in the
+server console).
+
+---
+
+## 3. Home
+
+**Route:** `/`  
+**Data:** none.
+
+Static list of tabs and a one-line description of each. No analysis is loaded.
+
+---
+
+## 4. Ducats
+
+**Route:** `/ducats`  
+**Subtabs:** none.  
+**Data:** `AnalysisResult` from the Prime analysis (`analyze`).
+
+### Display rules
+
+- Only **surplus tradable Prime parts with a ducat value > 0** are shown.
+- Rows are aggregated by `(item name, part name)`, though in practice each part
+  maps to one Prime item.
+- Columns:
+  - **Part** — `<item> <part>` (avoids duplicating the item name).
+  - **Qty** — summed surplus copies.
+  - **Duc** — ducats per copy.
+  - **Total** — `Qty × Duc`.
+- Footer total is `AnalysisResult.total_ducats_safe`.
+- Empty state: “Nothing to sell for ducats right now — surplus Prime parts will
+  appear here.”
+
+### Logic notes
+
+- The underlying Prime analysis excludes cosmetic items and items whose status
+  is `crafting`.
+- Items currently in the foundry are status `crafting`; their parts and consumed
+  blueprint are committed, so they do not contribute surplus.
+- The former Missing / Excess / Ready-to-Build web subviews were removed. The
+  CLI `ducats` command still prints the full report.
+
+---
+
+## 5. Relics
+
+**Default:** Safe to Spam at `/relics`.  
+**Data:** `RelicInfo` list (`build_relics_map`) and `NeededPart` list
+(`build_needed_drops`).
+
+### 5.1 Safe to Spam (default, first subtab)
+
+**Path:** `/relics`
+
+A relic is **safe to spam** when every Prime-part reward it can drop is already
+covered:
+
+- Only owned relics are considered. The inventory path must be an Intact
+  projection (`/Projections/T…`); feature/Immortal/Requiem placeholders are
+  ignored.
+- For each owned relic, every reward is checked:
+  - Non-Prime rewards (Forma, Kuva, Riven Sliver, etc.) are ignored.
+  - A Prime part is “not needed” when owned copies already cover all required
+    builds (`missing == 0`). This accounts for parts consumed by crafting.
+  - Only parts with ducats > 0 participate.
+- If no reward is still needed, the relic is safe.
+
+**Table columns:** Relic, Tier, Count, Vaulted.  
+**Empty state:** “No relics are safe to spam yet.”
+
+Subtab bar: **Safe to Spam** first, followed by one tab per item category that
+currently has needed parts.
+
+### 5.2 Needed Drops by item type
+
+**Paths:** `/relics/needed/<category-slug>`
+
+Tab categories are generated from the categories present in the needed list,
+ordered:
+
+`Warframes → Primary → Secondary → Melee → Archwing → Sentinels → Arch-Gun`,
+then any unknown categories alphabetically.
+
+For each Prime item and each tradable part:
+
+- Required copies = `part count × needed builds`, where needed builds is 1 for
+  an unowned item plus any extra copies consumed by sub-crafts (akimbo variants).
+- Built copies of a Prime component that are already finished are subtracted.
+- A row is included only when `missing > 0` and the part has a ducat value.
+- The **Owned Relic Drops** column lists only the player’s owned relics that can
+  drop the part, as `relic name ×count`, or `—`.
+- Reward-name matching handles the different in-game conventions:
+  - Warframes/Archwings append `Blueprint` to component names.
+  - Archwing display prefixes (`<ARCHWING>`) are stripped.
+  - Weapon parts keep their bare reward name.
+
+**Table columns:** Part, Item, Need, Duc, Owned Relic Drops.  
+**Heading:** `<Category> — Needed Prime Parts`.  
+**Empty state:** “No missing parts in this category.”
+
+> This table is Prime-only by design: it answers “which owned relics help finish
+> Prime items?”
+
+---
+
+## 6. Craft
+
+**Route:** `/craft?q=<query>`
+
+### Search
+
+- No query → search form.
+- Query → substring search over all game items, scored:
+  - exact match (4), starts-with (3), word/hyphen match (2), loose substring (1).
+  - Ties sort by shorter display name.
+- The first **5** matches are rendered.
+- Exact matches are expanded by default; other results are collapsed.
+- No matches → form with an inline error.
+
+### Result rendering
+
+Each result is a `<details>` block containing:
+
+1. **Crafting tree** — recursive tree to depth 3.
+   - Component colours: green (enough owned), yellow (some owned), red (none).
+   - Blueprint rows are included; the main blueprint is consumed once.
+   - Craftable components expand only when not enough copies are owned.
+2. **Crafting List** — intermediate items that must be built, with needed,
+   owned, and craft count.
+3. **Raw Materials** — aggregated materials with needed/owned and status.
+4. **Farming List** — materials still short.
+
+The crafting plan is produced by `resolve_tree` → `add_missing_blueprint_requirement`
+→ `postprocess_craft_plan`, so intermediate components are decomposed into raw
+materials and any missing blueprints are preserved.
+
+Mastery rows link to this page with `/craft?q=<item name>`.
+
+---
+
+## 7. Weapon Chains
+
+**Route:** `/weapon-chains`  
+**Data:** `build_weapon_chains` (cached lazily).
+
+### Chain discovery
+
+1. Restrict to items whose category is a weapon category.
+2. Build a graph from recipes where both the ingredient and result are weapons.
+3. Start from roots that build into another weapon but are not themselves built
+   from another weapon; follow the first successor to form a linear chain.
+4. Keep chains of length ≥ 2 whose **final** weapon is neither owned nor
+   mastered.
+5. Resolve the final weapon’s crafting tree to depth 5 and aggregate
+   requirements/craftables across all shown chains.
+
+### Display
+
+- Header: `N chains with unowned final weapons`.
+- One `<details>` per chain:
+  - Summary shows the full upgrade path (`A → B → C`).
+  - Tree for the final weapon only.
+  - Per-chain crafting summary.
+- A final aggregated crafting/materials/farming summary covers all shown chains.
+- Empty state: “No unowned weapon chains found!”
+
+---
+
+## 8. Mastery
+
+**Default:** `/mastery` = **Unmastered Owned Items**.  
+**Data:** `MasteryReport` from `build_mastery_report`.  
+**Subtabs (in order):**
+
+1. Unmastered Owned Items
+2. Ready to Build
+3. Owned Blueprints
+4. Missing Blueprints
+
+Every table is driven by the **masterable item universe**, not by the Prime
+index.
+
+### 8.1 Masterable universe
+
+- Items with `masterable: true`, plus the special Operator Amp barrel rule.
+- Excludes a small unobtainable set (Excalibur Prime, Lato Prime, Skana Prime).
+
+### 8.2 Per-item classification
+
+The report combines XP history, ownership, and the crafting tree.
+
+**Mastered**
+
+- Ever leveled, and current XP ≥ the item’s expected maximum:
+  - Necramechs: 1,600,000
+  - Warframes / Archwings / Sentinels / pets: 900,000
+  - Kuva/Tenet/Coda weapons: 800,000
+  - Everything else: 450,000
+- Modular items also use a feature check for gilding/progress where available.
+
+**Unmastered Owned Items**
+
+- Owned, but not mastered.
+- Includes owned items at **0 XP** and partially leveled items.
+- Ownership comes from equipment/modular/pet/vehicle sections, pending foundry
+  results, and assembled `ModularParts`.
+- `MiscItems` is deliberately excluded: a loose modular component (e.g. an
+  unassembled K-Drive deck) does not make the masterable item owned.
+- Modular component items (K-Drive/Zaw/Kitgun components, Amp parts, pet parts)
+  count as owned only when an assembled item references them in
+  `ModularParts`.
+
+**Unowned items** are split using the full crafting plan:
+
+- **Ready to Build** — a recipe exists and every blueprint + material in the
+  whole tree is owned.
+- **Owned Blueprints** — all required blueprints are owned, but at least one
+  material is missing.
+- **Missing Blueprints** — at least one required blueprint is missing, or the
+  item has no recipe.
+
+Modular component items are not evaluated for Ready to Build, because their
+recipe builds the component rather than assembling the finished modular item;
+they are classified by whether their own blueprint is owned.
+
+The readiness plan uses `resolve_tree` (depth 5) +
+`add_missing_blueprint_requirement` + `postprocess_craft_plan`, so it includes
+component blueprints and decomposes intermediate components into materials.
+
+### 8.3 Report sections and ordering
+
+| Section | Grouping | Sort |
+|---|---|---|
+| Unmastered Owned Items | Farming tier groups | Tier, then name |
+| Ready to Build | Flat | Name |
+| Owned Blueprints | Flat | Name |
+| Missing Blueprints | Farming tier groups | Tier, then name |
+
+Every item row has **Item, Category, MR, Source**.  
+“MR” is the item’s mastery-point contribution, not the required mastery rank.
+“Source” is the acquisition hint.
+
+### 8.4 Web presentation
+
+- The subtab bar is shown first; the progression summary sits **below** it.
+- Summary shows: masterable items mastered, unmastered owned, ready to build,
+  owned blueprints, missing blueprints, remaining, and total MR available.
+- Ready to Build and Owned Blueprints rows link to the Craft tab.
+- Empty states:
+  - Ready to Build has a dedicated message.
+  - Other empty sections say “No items in this section.”
+
+---
+
+## 9. Mods
+
+**Route:** `/mods`  
+**Data:** `ModsReport` from `build_mods_report`.
+
+### Logic
+
+- Consider only items in the `Mods` category.
+- Owned mods come from `RawUpgrades`, `Upgrades`, and `FocusUpgrades`, filtered
+  to known game mods.
+- Duplicate names are collapsed; a mod counts as owned if **any** path variant
+  is owned.
+- Excluded types: Rivens, Focus Ways, Transmutation mods.
+- WFCD mod type is mapped to an in-game category (Warframe, Aura, Augment,
+  Exilus, Primary, Secondary, Melee, Companion Beast/Robotic, etc.).
+- Missing mods are grouped by category and sorted by name.
+- Acquisition hints come from the cached WFCD mod-drop table.
+
+### Display
+
+- Summary: owned unique mods, total owned copies, total missing.
+- Category summary table, sorted by missing count descending.
+- One expandable `<details>` per category with **Mod / Rarity / Source**.
+- Empty state: “You have all mods!”
+
+---
+
+## 10. Cleanup
+
+**Subtabs:** Re-Buyable (default) · Prime Variant · Excess.
+
+### 10.1 Re-Buyable
+
+**Path:** `/cleanup`
+
+- Build a market map of weapons that can be re-bought for credits:
+  - `MK1-` weapons: direct purchase.
+  - Weapons with market and blueprint credit costs: blueprint purchase.
+- Exclude weapons that are ingredients for a recipe whose result is not already
+  owned (they may be needed for future crafting).
+- Display owned equipment that is market-re-buyable and not excluded.
+
+**Columns:** Name, Category, Buy Type, Rarest Material.  
+**Empty state:** “Nothing to clean up!”
+
+### 10.2 Prime Variant
+
+**Path:** `/cleanup/sell`
+
+- Find owned non-Prime equipment.
+- Match each to a Prime counterpart by name/category (exact or unique prefix).
+- Keep only pairs where the Prime variant is also owned.
+
+**Columns:** Item, Category, Prime Variant.  
+**Empty state:** “Nothing to clean up!”
+
+### 10.3 Excess
+
+**Path:** `/cleanup/excess`
+
+- Consider blueprints in `Recipes` and components in `MiscItems`.
+- An item is excess when **every crafting path** from it ultimately leads to an
+  item that is already owned or mastered.
+- The whole owned stack is marked as sellable.
+
+**Columns:** Name, Type, Owned, Sell, Crafts Into.  
+**Empty state:** “No excess items found!”
+
+---
+
+## 11. Shared model rules worth validating
+
+These rules affect more than one tab.
+
+### Ownership and “finished” items
+
+- `owned` is a count of every inventory item plus pending foundry results.
+- Blueprints consumed by a pending recipe are subtracted from the blueprint
+  count, preventing the same build from being counted twice.
+- `owned_finished` (used by Prime/relic logic) is equipment sections plus
+  mastered items; it does **not** include pending results.
+
+### Ducats
+
+- A part is safe to sell only when `surplus > 0` and `ducats > 0`.
+- Surplus is calculated against the number of copies required for all builds,
+  including extra copies consumed by sub-crafts.
+
+### Relics
+
+- Relic drop lists show **owned relics only**.
+- Safe-to-spam ignores non-Prime rewards and treats a reward as unneeded when
+  owned copies cover every required build.
+
+### Mastery
+
+- “In Progress” is now **Unmastered Owned Items**: ownership matters more than
+  whether XP has been earned.
+- “Ready to Build” means the complete blueprint + material tree is owned; it is
+  not limited to Primes.
+- “Owned Blueprints” means all required blueprints are owned but materials are
+  short.
+- An item being crafted is owned (pending result), so it belongs in Unmastered
+  Owned Items, not Ready to Build.
+
+### Ordering
+
+- Tables are sorted deterministically:
+  - Ducats: item name, then part name.
+  - Relics: needed rows by item/part; categories by the fixed order above.
+  - Mastery: tier/name or name as listed in §8.3.
+  - Mods: category by missing count; mods by name.
+  - Cleanup: category/name (re-buyable, prime variant); name (excess).
+
+---
+
+## 12. Known limitations / design decisions
+
+Open questions for the reviewer:
+
+1. **Ducats web view is sell-only.** Missing/Excess/Ready views exist only in
+   the CLI now.
+2. **Relic drops are owned-only.** There is no “where can I farm this part”
+   view across all relics.
+3. **Mastery readiness depth is 5.** A deeper recipe chain could theoretically
+   be misclassified as not ready.
+4. **Items without recipes** always fall into Missing Blueprints, even if they
+   are acquired through other means (adversaries, drops, vendors).
+5. **Weapon chains are linear.** Only the first successor is followed, and
+   cycles are capped at 20 links.
+6. **Cleanup Excess sells the entire stack.** It does not reserve copies for
+   unowned future crafts if all paths are already covered.
+7. **Modular assembly is not modeled.** Loose K-Drive/Kitgun/Zaw/Amp/pet
+   components are not treated as owned; those masterable items are classified
+   by their own blueprint until an assembled item references the component.
+8. **Re-Buyable** is weapon-only and does not consider mastered-but-sold status
+   when deciding whether an ingredient is still needed.
+9. **No authentication.** Default bind is localhost; exposing on a LAN is
+   explicitly opt-in.
+
+---
+
+## 13. Review checklist
+
+- [ ] Every top-level tab and subtab has the expected default and order.
+- [ ] Unsupported/removed paths return 404 (no legacy redirects).
+- [ ] Refresh Inventory succeeds with a success toast and preserves the current
+      page; failure keeps cached data and shows an error toast.
+- [ ] Refresh Item DB reloads indices and clears derived caches.
+- [ ] Ducats lists only surplus parts with ducats and shows the expected total.
+- [ ] Safe-to-Spam is first/default, and needed categories match the fixed order.
+- [ ] Warframe/Archwing relic reward names include the `Blueprint` suffix.
+- [ ] Craft exact matches open automatically; other matches stay collapsed.
+- [ ] Mastery tables contain masterable items only (not Prime-only).
+- [ ] An unowned masterable item with every blueprint and material appears
+      under Ready to Build, and leaves that tab once it is owned or mastered.
+- [ ] Owned 0-XP items appear under Unmastered Owned Items.
+- [ ] Ready-to-build items are excluded from Owned/Missing Blueprints.
+- [ ] Mods excludes Rivens, Focus Ways, and Transmutation mods.
+- [ ] Cleanup subtabs show the documented columns and empty states.
