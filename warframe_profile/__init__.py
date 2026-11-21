@@ -8,6 +8,9 @@ the shared HTTP timeout and user-agent strings.
 
 import os
 
+#: Application version shown by ``--version`` and packaged builds.
+__version__ = "1.0"
+
 
 def _default_data_dir() -> str:
     """Return the platform-appropriate per-user data directory."""

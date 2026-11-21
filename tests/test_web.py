@@ -102,13 +102,20 @@ def test_home_page_has_both_refresh_buttons():
 def test_notifications_are_anchored_to_lower_right():
     page = render_home()
 
-    assert ".notice { position: fixed; bottom: 16px; right: 16px;" in page
+    assert ".notice-stack { position: fixed; bottom: 16px; right: 16px;" in page
 
 
 def test_notifications_dismiss_automatically_after_a_few_seconds():
     page = render_home()
 
-    assert "setTimeout(() => notice.remove(), 5000);" in page
+    assert "}, 5000);" in page
+
+
+def test_refresh_buttons_show_progress_feedback():
+    page = render_home()
+
+    assert "Refreshing data - this can take a few seconds" in page
+    assert 'button.textContent = "Refreshing...";' in page
 
 
 def _bare_handler(web_server):

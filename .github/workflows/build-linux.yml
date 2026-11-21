@@ -1,0 +1,48 @@
+name: Build Linux executable
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-exe:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+
+      - name: Build one-file executable
+        run: |
+          python -m PyInstaller --clean --noconfirm \
+            --distpath dist/linux --workpath build/linux warframe.spec
+
+      - name: Smoke test
+        run: dist/linux/warframe-profile --help
+
+      - name: Create checksum
+        run: sha256sum dist/linux/warframe-profile > dist/linux/warframe-profile.sha256
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: warframe-profile-linux-x64
+          path: |
+            dist/linux/warframe-profile
+            dist/linux/warframe-profile.sha256
+          if-no-files-found: error

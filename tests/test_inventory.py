@@ -197,3 +197,76 @@ def test_find_credentials_raises_when_nothing_matches(monkeypatch):
 
     with pytest.raises(InventoryFetchError, match="accountId/nonce"):
         _find_credentials_in_memory(1234)
+
+
+def test_find_credential_candidates_prefers_most_common(monkeypatch):
+    from warframe_profile.model.inventory import _find_credential_candidates
+
+    first = f"?accountId={'1' * 24}&nonce=one".encode()
+    second = f"?accountId={'2' * 24}&nonce=two".encode()
+
+    def fake_scan(_pid, pattern, context=256, max_per_region=None):
+        if pattern == "accountId=":
+            yield 0x1000, first
+            yield 0x2000, second
+            yield 0x3000, second
+
+    monkeypatch.setattr("warframe_profile.model.inventory.iter_in_memory", fake_scan)
+
+    assert _find_credential_candidates(1234) == [("2" * 24, "two"), ("1" * 24, "one")]
+
+
+def test_find_credential_candidates_full_fallback(monkeypatch):
+    from warframe_profile.model.inventory import _find_credential_candidates
+
+    valid = f"?accountId={_ACCOUNT}&nonce=full".encode()
+    calls = []
+
+    def fake_scan(_pid, pattern, context=256, max_per_region=None):
+        calls.append((pattern, max_per_region))
+        if pattern == "accountId=" and max_per_region is None:
+            yield 0x1000, valid
+
+    monkeypatch.setattr("warframe_profile.model.inventory.iter_in_memory", fake_scan)
+
+    assert _find_credential_candidates(1234) == [(_ACCOUNT, "full")]
+    assert ("accountId=", None) in calls
+
+
+def test_fetch_inventory_tries_the_next_nonce_after_rejection(monkeypatch):
+    from warframe_profile.model import inventory as inv_mod
+
+    monkeypatch.setattr(inv_mod, "find_warframe_pid", lambda: 1234)
+    monkeypatch.setattr(
+        inv_mod,
+        "_find_credentials_with_retry",
+        lambda _pid: [("a" * 24, "stale"), ("b" * 24, "fresh")],
+    )
+
+    def fake_fetch(account_id, nonce):
+        if nonce == "stale":
+            raise inv_mod._NonceRejectedError("403")
+        return {"MiscItems": []}
+
+    monkeypatch.setattr(inv_mod, "_fetch_inventory_with", fake_fetch)
+
+    assert inv_mod.fetch_inventory() == ({"MiscItems": []}, "b" * 24)
+
+
+def test_fetch_inventory_reports_when_all_nonces_are_rejected(monkeypatch):
+    from warframe_profile.model import inventory as inv_mod
+
+    monkeypatch.setattr(inv_mod, "find_warframe_pid", lambda: 1234)
+    monkeypatch.setattr(
+        inv_mod,
+        "_find_credentials_with_retry",
+        lambda _pid: [("a" * 24, "stale")],
+    )
+
+    def fake_fetch(_account_id, _nonce):
+        raise inv_mod._NonceRejectedError("403")
+
+    monkeypatch.setattr(inv_mod, "_fetch_inventory_with", fake_fetch)
+
+    with pytest.raises(InventoryFetchError, match="rejected"):
+        inv_mod.fetch_inventory()

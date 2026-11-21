@@ -1,10 +1,21 @@
 # Warframe Profile — Web UI Design
 
-**Status:** Draft for validation  
-**Scope:** The `serve` web UI: page layout, routes, and the logic behind every
-table and subtab.  
-**Audience:** Maintainer/design reviewer. This document describes current
+**Status:** Current — maintained design reference  
+**Scope:** The `serve` web UI plus the shared MVP model/presenter/view boundaries
+behind every table and subtab.  
+**Audience:** Maintainers and reviewers. This document describes current
 behaviour; it is not a roadmap.
+
+### Current implementation status
+
+- Model: `ItemData`, `Inventory`, prime/relic/cleanup analysis, mastery and mod
+  report models. Model modules do not import presenters or views.
+- Presenter: sub-command modules load data, call model methods, and delegate
+  rendering; the web server owns HTTP routing and view-model preparation.
+- View: passive renderers only; they consume report/view dataclasses and craft
+  trees and never read `ItemData` or `Inventory`.
+- CI runs Ruff, Pyright, and pytest; tagged builds publish Linux and Windows
+  executables with SHA-256 checksums.
 
 > Named items in examples are illustrative only. Inventory-dependent lists
 > change as items are built, mastered, or sold; do not treat a specific item
@@ -584,6 +595,10 @@ Open questions for the reviewer:
    when deciding whether an ingredient is still needed.
 9. **No authentication.** Default bind is localhost; exposing on a LAN is
    explicitly opt-in.
+10. **Credential discovery depends on the game heap.** The scanner retries,
+    scans whole regions as a fallback, and tries multiple nonce candidates,
+    but a game update can still change the credential layout. Errors are
+    reported by stage rather than exposing credential values.
 
 ---
 

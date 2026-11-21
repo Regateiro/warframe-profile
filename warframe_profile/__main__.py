@@ -8,8 +8,9 @@ import importlib
 import os
 import sys
 
-from warframe_profile import DATA_DIR
+from warframe_profile import DATA_DIR, __version__
 from warframe_profile.compat import configure_stdio
+from warframe_profile.log import configure as configure_logging
 from warframe_profile.model.errors import (
     InventoryFetchError,
     ItemCacheNotFoundError,
@@ -96,6 +97,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Warframe Profile Tool (runs the web UI when no sub-command is given)"
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     _add_shared_args(parser, suppress_defaults=False)
 
     # -- Sub-commands (optional so bare --refresh works).
@@ -137,6 +143,7 @@ def main() -> int:
         Exit code (0 on success, 1 on error).
     """
     configure_stdio()
+    configure_logging()
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -168,8 +175,14 @@ def main() -> int:
 
     try:
         func(args)
-    except (ItemCacheNotFoundError, InventoryFetchError, WarframeNotRunningError) as exc:
-        print(f"  Error: {exc}", file=sys.stderr)
+    except WarframeNotRunningError as exc:
+        print(f"  Warframe not found: {exc}", file=sys.stderr)
+        return 1
+    except InventoryFetchError as exc:
+        print(f"  Inventory refresh failed: {exc}", file=sys.stderr)
+        return 1
+    except ItemCacheNotFoundError as exc:
+        print(f"  Item database unavailable: {exc}", file=sys.stderr)
         return 1
     return 0
 

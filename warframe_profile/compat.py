@@ -23,10 +23,13 @@ def configure_stdio() -> None:
     is never lost to an unencodable character.
     """
     for stream in (sys.stdout, sys.stderr):
-        if stream is None or not hasattr(stream, "reconfigure"):
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
             continue
         try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
+            reconfigure(encoding="utf-8", errors="replace")
         except (ValueError, OSError):
             pass
     enable_windows_vt()

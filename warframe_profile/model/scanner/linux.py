@@ -6,14 +6,14 @@ Wine/Proton.  The public interface is re-exported by
 """
 
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 
 from warframe_profile.model.errors import WarframeNotRunningError
 from warframe_profile.model.scanner._common import (
     DEFAULT_MAX_REGION,
     MAX_IMAGE_REGION,
     WARFRAME_PROCESS_NAME,
-    scan_buffer_all,
+    scan_region_chunks,
 )
 
 
@@ -52,21 +52,21 @@ def iter_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
-    max_per_region: int = DEFAULT_MAX_REGION,
-) -> Iterator[tuple[int, bytes]]:
+    max_per_region: int | None = DEFAULT_MAX_REGION,
+) -> Generator[tuple[int, bytes], None, None]:
     """Yield every occurrence of an ASCII *pattern* in a process's memory.
 
     Works like :func:`find_in_memory` but keeps scanning after the first
     match, so callers can disambiguate stale or unrelated copies of a string.
     Large anonymous (heap) regions are clamped to *max_per_region*;
-    file-backed regions are clamped to 8 MiB — this avoids pathological
-    scan times while still finding the credential strings.
+    file-backed regions are clamped to 8 MiB.  Pass ``None`` to scan whole
+    regions in bounded chunks (the credential fallback).
 
     Args:
         pid: Target process ID.
         pattern: ASCII string to locate.
         context: Number of extra bytes to return around each match.
-        max_per_region: Maximum bytes to scan per memory region.
+        max_per_region: Maximum bytes per region, or ``None`` for a full scan.
 
     Yields:
         ``(address, surrounding_bytes)`` for every match, in memory order.
@@ -89,14 +89,18 @@ def iter_in_memory(
         # Anonymous (heap) regions are scanned up to max_per_region;
         # file-backed regions are limited to 8 MiB.
         is_anon = len(parts) < 6 or parts[-1].startswith("[") or parts[-1] == ""
-        limit = max_per_region if is_anon else min(end - start, MAX_IMAGE_REGION)
-        chunk_size = min(end - start, limit)
+        limit = max_per_region if is_anon else MAX_IMAGE_REGION
+        if limit is not None:
+            limit = min(end - start, limit)
 
         try:
             with open(f"/proc/{pid}/mem", "rb") as mem:
-                mem.seek(start)
-                data = mem.read(chunk_size)
-                yield from scan_buffer_all(data, needle, context, start)
+
+                def read(offset: int, size: int) -> bytes:
+                    mem.seek(offset)
+                    return mem.read(size)
+
+                yield from scan_region_chunks(read, start, end - start, needle, context, limit)
         except (OSError, PermissionError):
             pass
 
@@ -105,7 +109,7 @@ def find_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
-    max_per_region: int = DEFAULT_MAX_REGION,
+    max_per_region: int | None = DEFAULT_MAX_REGION,
 ) -> tuple[int | None, bytes | None]:
     """Search a process's address space for an ASCII *pattern*.
 
@@ -116,7 +120,7 @@ def find_in_memory(
         pid: Target process ID.
         pattern: ASCII string to locate.
         context: Number of extra bytes to return around the match.
-        max_per_region: Maximum bytes to scan per memory region.
+        max_per_region: Maximum bytes per region, or ``None`` for a full scan.
 
     Returns:
         ``(address, surrounding_bytes)`` or ``(None, None)``.

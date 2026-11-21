@@ -23,7 +23,7 @@ classifiers = [
 dependencies = ["prettytable>=3.9,<4"]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pytest", "pyright"]
 
 [project.scripts]
 warframe = "warframe_profile.__main__:main"

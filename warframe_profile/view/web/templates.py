@@ -86,9 +86,11 @@ _PAGE_STYLES = f"""<style>
   .flash {{ padding: 10px 14px; border-radius: 6px; margin: 12px 0;
            background: #1f6feb22; border: 1px solid #1f6feb; color: #58a6ff; }}
   .flash-error {{ background: {RED}22; border-color: {RED}; color: {RED}; }}
-  .notice {{ position: fixed; bottom: 16px; right: 16px; z-index: 1000;
-            max-width: 380px; margin: 0; display: flex; gap: 12px;
-            align-items: flex-start; box-shadow: 0 8px 24px #0008; }}
+  .notice-stack {{ position: fixed; bottom: 16px; right: 16px; z-index: 1000;
+                   display: flex; flex-direction: column; gap: 8px;
+                   max-width: 380px; }}
+  .notice {{ margin: 0; display: flex; gap: 12px; align-items: flex-start;
+             box-shadow: 0 8px 24px #0008; }}
   .notice button {{ background: transparent; border: none; color: inherit;
                    padding: 0 2px; font-size: 1.1rem; line-height: 1; }}
   .notice button:hover {{ background: transparent; color: #fff; }}
@@ -127,10 +129,17 @@ _NOTICE_JS = """<script>
   close.addEventListener("click", () => notice.remove());
   notice.appendChild(close);
 
-  const nav = document.querySelector("nav");
-  if (nav) nav.after(notice);
-  else document.body.prepend(notice);
-  setTimeout(() => notice.remove(), 5000);
+  let stack = document.querySelector(".notice-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "notice-stack";
+    document.body.appendChild(stack);
+  }
+  stack.appendChild(notice);
+  setTimeout(() => {
+    notice.remove();
+    if (!stack.hasChildNodes()) stack.remove();
+  }, 5000);
 })();
 </script>"""
 
@@ -140,6 +149,34 @@ _NOTICE_JS = """<script>
 #: The refresh form stores the open/closed state in ``sessionStorage`` keyed
 #: by the current path and query, then the reloaded page restores it.  This
 #: keeps expanded crafting results (and other detail sections) open.
+_REFRESH_PROGRESS_JS = """<script>
+(() => {
+  document.querySelectorAll('form[action^="/refresh"]').forEach((form) => {
+    form.addEventListener("submit", () => {
+      const button = form.querySelector("button[type=submit]");
+      if (!button) return;
+      button.disabled = true;
+      button.textContent = "Refreshing...";
+
+      let status = document.getElementById("refresh-status");
+      if (!status) {
+        status = document.createElement("div");
+        status.id = "refresh-status";
+        status.className = "dim";
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        status.style.margin = "-12px 0 16px";
+        const nav = document.querySelector("nav");
+        if (nav) nav.after(status);
+        else document.body.prepend(status);
+      }
+      status.textContent =
+        "Refreshing data - this can take a few seconds while the game is scanned...";
+    });
+  });
+})();
+</script>"""
+
 _DETAILS_STATE_JS = """<script>
 (() => {
   const key = "wf-open-details:" + location.pathname + location.search;
@@ -225,6 +262,7 @@ def _page(title: str, content: str, active: str) -> str:
 <nav>{tab_links}{_refresh_actions()}</nav>
 {content}
 {_NOTICE_JS}
+{_REFRESH_PROGRESS_JS}
 {_DETAILS_STATE_JS}
 </body>
 </html>"""

@@ -24,7 +24,7 @@ Notes:
 from __future__ import annotations
 
 import ctypes
-from collections.abc import Iterator
+from collections.abc import Generator
 from typing import Any
 
 from warframe_profile.model.errors import WarframeNotRunningError
@@ -32,7 +32,7 @@ from warframe_profile.model.scanner._common import (
     DEFAULT_MAX_REGION,
     MAX_IMAGE_REGION,
     WARFRAME_PROCESS_NAME,
-    scan_buffer_all,
+    scan_region_chunks,
 )
 
 # ---------------------------------------------------------------------------
@@ -140,7 +140,8 @@ def _kernel32() -> Any:
     if _KERNEL32 is not None:
         return _KERNEL32
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    win_dll = getattr(ctypes, "WinDLL")
+    kernel32 = win_dll("kernel32", use_last_error=True)
 
     kernel32.CreateToolhelp32Snapshot.argtypes = [DWORD, DWORD]
     kernel32.CreateToolhelp32Snapshot.restype = HANDLE
@@ -280,20 +281,21 @@ def iter_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
-    max_per_region: int = DEFAULT_MAX_REGION,
-) -> Iterator[tuple[int, bytes]]:
+    max_per_region: int | None = DEFAULT_MAX_REGION,
+) -> Generator[tuple[int, bytes], None, None]:
     """Yield every occurrence of an ASCII *pattern* in a process's memory.
 
     Walks the target's memory regions with ``VirtualQueryEx`` and scans
     each readable committed region with ``ReadProcessMemory``.  Private
     (heap) regions are clamped to *max_per_region*; image/mapped regions
-    are clamped to 8 MiB, mirroring the Linux scanner.
+    are clamped to 8 MiB.  Pass ``None`` to scan whole regions in bounded
+    chunks (the credential fallback).
 
     Args:
         pid: Target process ID.
         pattern: ASCII string to locate.
         context: Number of extra bytes to return around each match.
-        max_per_region: Maximum bytes to scan per private region.
+        max_per_region: Maximum bytes per region, or ``None`` for a full scan.
 
     Yields:
         ``(address, surrounding_bytes)`` for every match, in memory order.
@@ -329,15 +331,18 @@ def iter_in_memory(
                 break
 
             if _is_readable(info):
-                limit = (
-                    max_per_region
-                    if info.Type == MEM_PRIVATE
-                    else min(region_size, MAX_IMAGE_REGION)
-                )
-                size = min(region_size, limit)
-                if size > 0:
-                    data = _read_region(handle, base, size)
-                    yield from scan_buffer_all(data, needle, context, base)
+                limit = max_per_region if info.Type == MEM_PRIVATE else MAX_IMAGE_REGION
+                if limit is not None:
+                    limit = min(region_size, limit)
+                if region_size > 0:
+                    yield from scan_region_chunks(
+                        lambda offset, size: _read_region(handle, offset, size),
+                        base,
+                        region_size,
+                        needle,
+                        context,
+                        limit,
+                    )
 
             next_address = base + region_size
             if next_address <= address:
@@ -351,7 +356,7 @@ def find_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
-    max_per_region: int = DEFAULT_MAX_REGION,
+    max_per_region: int | None = DEFAULT_MAX_REGION,
 ) -> tuple[int | None, bytes | None]:
     """Search a process's address space for an ASCII *pattern*.
 
@@ -362,7 +367,7 @@ def find_in_memory(
         pid: Target process ID.
         pattern: ASCII string to locate.
         context: Number of extra bytes to return around the match.
-        max_per_region: Maximum bytes to scan per private region.
+        max_per_region: Maximum bytes per region, or ``None`` for a full scan.
 
     Returns:
         ``(address, surrounding_bytes)`` or ``(None, None)``.

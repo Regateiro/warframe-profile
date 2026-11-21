@@ -3,11 +3,11 @@
 from types import SimpleNamespace
 
 from warframe_profile.model.analysis import (
-    _reward_names_for_part,
     build_needed_drops,
     build_relics_map,
 )
 from warframe_profile.model.data import Inventory, ItemData
+from warframe_profile.model.relics import _reward_names_for_part
 
 _VALKYR = "/Lotus/Powersuits/Berserker/ValkyrPrime"
 _CHASSIS = "/Lotus/Types/Recipes/WarframeRecipes/ValkyrPrimeChassisComponent"

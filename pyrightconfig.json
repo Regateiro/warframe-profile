@@ -1,5 +1,6 @@
 {
-  "venvPath": ".",
-  "venv": ".venv",
-  "pythonVersion": "3.13"
+  "include": ["warframe_profile"],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingTypeStubs": false
 }

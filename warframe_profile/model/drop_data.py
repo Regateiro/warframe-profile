@@ -6,18 +6,20 @@ caches them locally for use by the missing mods presenter.
 
 import json
 import os
-import sys
 import time
 import urllib.request
 from typing import Any
 
 from warframe_profile import DATA_DIR, HTTP_TIMEOUT, USER_AGENT_COMMUNITY
+from warframe_profile.log import get_logger
 from warframe_profile.model.utils import atomic_write_json
 
 #: URL for mod location data from WFCD drop data repository.
 MOD_LOCATIONS_URL = (
     "https://raw.githubusercontent.com/WFCD/warframe-drop-data/main/data/modLocations.json"
 )
+
+_log = get_logger("drop_data")
 
 #: Local cache path, in the same per-user directory as the other caches.
 _CACHE_PATH = os.path.join(DATA_DIR, "mod_drop_locations.json")
@@ -85,13 +87,13 @@ def load_mod_drops(force_refresh: bool = False) -> dict[str, list[dict[str, Any]
             atomic_write_json(cache_path, raw)
             _memo = (os.path.getmtime(cache_path), False)
         except OSError as exc:
-            print(f"Warning: could not cache mod drop data: {exc}", file=sys.stderr)
+            _log.warning("could not cache mod drop data: %s", exc)
             _memo = None
 
         _memo_value = _build_lookup(raw)
         return _memo_value
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"Warning: could not fetch mod drop data: {exc}", file=sys.stderr)
+        _log.warning("could not fetch mod drop data: %s", exc)
         # Try stale cache (which may itself be corrupt).
         try:
             with open(cache_path, encoding="utf-8") as f:

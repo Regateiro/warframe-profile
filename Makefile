@@ -64,9 +64,10 @@ format: ## Auto-format the code with ruff
 	$(POETRY) run ruff format .
 	$(POETRY) run ruff check --fix .
 
-check: ## Verify formatting and lint without modifying files (CI-friendly)
+check: ## Verify formatting, lint, and types without modifying files (CI-friendly)
 	$(POETRY) run ruff format --check .
 	$(POETRY) run ruff check .
+	$(POETRY) run pyright
 
 test: ## Run the test suite with pytest
 	$(POETRY) run pytest

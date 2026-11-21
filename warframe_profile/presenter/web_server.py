@@ -26,6 +26,7 @@ import traceback
 import urllib.parse
 
 from warframe_profile import DATA_DIR
+from warframe_profile.log import configure, get_logger
 from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
 from warframe_profile.model.inventory import load_inventory_with_fallback
@@ -122,6 +123,8 @@ _cache_lock = threading.RLock()
 # request, never by normal reads (those use ``_cache_lock`` for the swap).
 _items_refresh_lock = threading.Lock()
 
+_log = get_logger("web")
+
 
 def _with_notice(path: str, message: str, *, error: bool = True) -> str:
     """Return *path* with a notification parameter added.
@@ -161,14 +164,14 @@ def load_db(items_cache: str) -> None:
         _cache.item_data = item_data
         _cache.items_cache = items_cache
         if _cache.inventory is not None:
-            _cache.inventory = Inventory(_cache.inventory.raw, item_data)
+            _cache.inventory = _cache.inventory.rebind(item_data)
 
 
 def rebuild_derived_state() -> None:
     """Rebuild the inventory snapshot after the item database changes."""
     with _cache_lock:
         if _cache.inventory is not None:
-            _cache.inventory = Inventory(_cache.inventory.raw, _require_item_data())
+            _cache.inventory = _cache.inventory.rebind(_require_item_data())
 
 
 def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
@@ -184,7 +187,7 @@ def invalidate_analysis() -> None:
     """Drop every derived analysis by rebuilding the inventory snapshot."""
     with _cache_lock:
         if _cache.inventory is not None:
-            _cache.inventory = Inventory(_cache.inventory.raw, _require_item_data())
+            _cache.inventory = _cache.inventory.rebind(_require_item_data())
 
 
 def _is_same_origin_request(origin: str, referer: str, host: str) -> bool:
@@ -383,7 +386,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
             from warframe_profile.scripts.update_export_db import main as update_main
 
-            print("[web] Refreshing item database…", file=sys.stderr)
+            _log.info("Refreshing item database...")
             update_main(
                 SimpleNamespace(
                     items_cache=items_cache,
@@ -510,12 +513,10 @@ def main(args) -> None:
     host = getattr(args, "host", None) or HOST
     display_host = _display_host(host)
 
-    print("[web] Loading data…", file=sys.stderr)
+    configure()
+    _log.info("Loading data...")
     load_all(items_cache, inv_path, refresh)
-    print(
-        f"[web] Data loaded. Starting server on http://{display_host}:{port}",
-        file=sys.stderr,
-    )
+    _log.info("Data loaded. Starting server on http://%s:%s", display_host, port)
 
     class ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True
@@ -524,25 +525,24 @@ def main(args) -> None:
     try:
         server = ThreadedServer((host, port), WarframeHandler)
     except OSError as exc:
-        print(
-            f"[web] Could not bind {host}:{port}: {exc}. "
-            "Use --host/--port or set WARFRAME_WEB_HOST/WARFRAME_WEB_PORT.",
-            file=sys.stderr,
+        _log.error(
+            "Could not bind %s:%s: %s. Use --host/--port or set "
+            "WARFRAME_WEB_HOST/WARFRAME_WEB_PORT.",
+            host,
+            port,
+            exc,
         )
         raise SystemExit(1) from exc
 
     if not _is_loopback(host):
-        print(
-            f"[web] warning: bound to {host}, which is reachable from the network. "
-            "This UI has no authentication; only expose it on trusted networks.",
-            file=sys.stderr,
+        _log.warning(
+            "Bound to %s, which is reachable from the network. This UI has no "
+            "authentication; only expose it on trusted networks.",
+            host,
         )
 
     with server as httpd:
-        print(
-            f"[web] Serving at http://{display_host}:{port} (bound to {host}:{port})",
-            file=sys.stderr,
-        )
+        _log.info("Serving at http://%s:%s (bound to %s:%s)", display_host, port, host, port)
 
         def _handle_interrupt(signum, frame):
             """Turn the first Ctrl+C into a clean exit and ignore the rest.
@@ -567,7 +567,7 @@ def main(args) -> None:
             httpd.serve_forever()
         except KeyboardInterrupt:
             interrupted = True
-            print("\n[web] Shutting down.", file=sys.stderr)
+            _log.info("Shutting down.")
         finally:
             # After an interrupt SIGINT stays ignored until the process exits,
             # so a late forwarded Ctrl+C cannot break teardown.

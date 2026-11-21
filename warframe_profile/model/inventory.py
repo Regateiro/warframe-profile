@@ -26,12 +26,13 @@ lives in :class:`~warframe_profile.model.data.Inventory`.
 import json
 import os
 import re
-import sys
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
 
 from warframe_profile import HTTP_TIMEOUT, USER_AGENT_DE
+from warframe_profile.log import get_logger
 from warframe_profile.model.errors import (
     InventoryFetchError,
     ItemCacheNotFoundError,
@@ -42,6 +43,8 @@ from warframe_profile.model.utils import atomic_write_json
 
 #: DE inventory API endpoint.  Format with ``accountId`` and ``nonce``.
 INVENTORY_URL = "https://api.warframe.com/api/inventory.php?accountId={}&nonce={}&ct=STM"
+
+_log = get_logger("inventory")
 
 #: DE profile viewing API endpoint.  Format with ``playerId``.
 PROFILE_URL = "https://content.warframe.com/dynamic/getProfileViewingData.php?playerId={}"
@@ -56,10 +59,9 @@ _NONCE_FIRST_RE = re.compile(
     r"nonce=([A-Za-z0-9_-]+)[^\x00]{0,256}?[&?]accountId=([A-Za-z0-9]{24})"
 )
 
-#: Number of identical matches required to treat a credential pair as stable.
-#: Warframe's heap can contain stale or partial copies; community tools use
-#: the same "seen more than once" heuristic before trusting the value.
-_CREDENTIAL_MIN_REPEATS = 3
+#: Retry settings used when the credential string is not in memory yet.
+_CREDENTIAL_RETRY_ATTEMPTS = 3
+_CREDENTIAL_RETRY_DELAY = 1.0
 
 
 #: Inventory sections that contain equipment (weapons, warframes, necramechs,
@@ -146,7 +148,7 @@ class ExportDB:
                 os.remove(self._path)
             except OSError as exc:
                 # Best-effort cleanup of a stale cache; existence is re-checked below.
-                print(f"warning: could not remove stale cache {self._path}: {exc}", file=sys.stderr)
+                _log.warning("could not remove stale cache %s: %s", self._path, exc)
         if not self._path or not os.path.exists(self._path):
             self._download_missing_cache()
         try:
@@ -160,10 +162,11 @@ class ExportDB:
                 os.replace(self._path, corrupt_path)
             except OSError:
                 pass
-            print(
-                f"warning: item cache at {self._path} is unreadable ({exc}); "
-                f"re-downloading (old copy kept at {corrupt_path}) ...",
-                file=sys.stderr,
+            _log.warning(
+                "item cache at %s is unreadable (%s); re-downloading (old copy kept at %s)",
+                self._path,
+                exc,
+                corrupt_path,
             )
             self._download_missing_cache()
             try:
@@ -183,10 +186,7 @@ class ExportDB:
         if not self._path:
             raise ItemCacheNotFoundError("Item cache path is not set. Run update first.")
 
-        print(
-            f"Item cache not found at {self._path}. Downloading game data ...",
-            file=sys.stderr,
-        )
+        _log.info("Item cache not found at %s. Downloading game data...", self._path)
         # Imported lazily to avoid a circular import (the update script imports
         # this module for inventory helpers).
         from types import SimpleNamespace
@@ -294,77 +294,122 @@ def _extract_credentials(chunk: bytes) -> tuple[str, str] | None:
     return None
 
 
-def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
-    """Scan Warframe process memory for accountId and nonce.
+def _find_credential_candidates(pid: int) -> list[tuple[str, str]]:
+    """Return credential candidates ordered by how often they appear.
 
-    Warframe stores a URL containing the account's API credentials in its
-    heap memory.  A naive scan is unreliable: the heap can contain stale,
-    truncated, or unrelated copies of the same markers, so the first match
-    is not necessarily valid.  This walks every match, validates the
-    account/nonce shape, and only trusts a pair once it has been seen
-    multiple times (community tools use the same heuristic).  If no pair
-    repeats, the most common valid candidate is used.
+    The fast pass scans the usual heap range.  If nothing valid is found,
+    a second pass scans whole regions in bounded chunks, which catches
+    credentials that moved past the default per-region limit after a game
+    update.
+    """
+    candidates: Counter[tuple[str, str]] = Counter()
+
+    def collect(pattern: str, *, full: bool) -> None:
+        kwargs = {"max_per_region": None} if full else {}
+        for _address, chunk in iter_in_memory(pid, pattern, context=512, **kwargs):
+            credentials = _extract_credentials(chunk)
+            if credentials is not None:
+                candidates[credentials] += 1
+
+    # Account-first is the known layout and avoids the many unrelated
+    # ``nonce=`` fragments in HTTP auth strings.
+    collect("accountId=", full=False)
+    if not candidates:
+        collect("nonce=", full=False)
+    if not candidates:
+        collect("accountId=", full=True)
+    if not candidates:
+        collect("nonce=", full=True)
+
+    return [pair for pair, _count in candidates.most_common()]
+
+
+def _find_credentials_in_memory(pid: int) -> tuple[str, str]:
+    """Scan Warframe process memory and return the most likely credentials.
 
     Raises:
         InventoryFetchError: if credentials cannot be found.
     """
-    # Search for the accountId marker first: it is the start of the auth
-    # string and avoids matching the many non-prime ``nonce=`` fragments.
-    candidates: Counter[tuple[str, str]] = Counter()
-    for _address, chunk in iter_in_memory(pid, "accountId=", context=512):
-        credentials = _extract_credentials(chunk)
-        if credentials is None:
-            continue
-        candidates[credentials] += 1
-        if candidates[credentials] >= _CREDENTIAL_MIN_REPEATS:
-            return credentials
-
-    # Some client versions/log paths may expose nonce before accountId.
-    if not candidates:
-        for _address, chunk in iter_in_memory(pid, "nonce=", context=512):
-            credentials = _extract_credentials(chunk)
-            if credentials is None:
-                continue
-            candidates[credentials] += 1
-            if candidates[credentials] >= _CREDENTIAL_MIN_REPEATS:
-                return credentials
-
+    candidates = _find_credential_candidates(pid)
     if candidates:
-        return candidates.most_common(1)[0][0]
-
+        return candidates[0]
     raise InventoryFetchError(
         "Could not find accountId/nonce in Warframe memory. Make sure you're in the Orbiter."
     )
 
 
-def fetch_inventory() -> tuple[dict, str]:
-    """Scan Warframe memory for credentials and fetch the live inventory.
+def _find_credentials_with_retry(pid: int) -> list[tuple[str, str]]:
+    """Find credentials, retrying briefly while the game finishes a sync."""
+    for attempt in range(_CREDENTIAL_RETRY_ATTEMPTS):
+        candidates = _find_credential_candidates(pid)
+        if candidates:
+            return candidates
+        if attempt < _CREDENTIAL_RETRY_ATTEMPTS - 1:
+            _log.info(
+                "Credentials not found yet (attempt %s/%s); retrying...",
+                attempt + 1,
+                _CREDENTIAL_RETRY_ATTEMPTS,
+            )
+            time.sleep(_CREDENTIAL_RETRY_DELAY)
+    raise InventoryFetchError(
+        "Could not find accountId/nonce in Warframe memory. "
+        "Make sure you're in the Orbiter and try refresh again."
+    )
 
-    This is the main live-fetch pipeline:
-    PID → credentials → DE API → parsed JSON.
 
-    Returns:
-        ``(inventory_dict, account_id)``.
-    """
-    pid = find_warframe_pid()
-    account_id, nonce = _find_credentials_in_memory(pid)
+class _NonceRejectedError(RuntimeError):
+    """Internal signal that the API rejected a candidate nonce."""
 
+
+def _fetch_inventory_with(account_id: str, nonce: str) -> dict:
+    """Fetch the live inventory with one credential pair."""
     inv_url = INVENTORY_URL.format(account_id, nonce)
     req = urllib.request.Request(
         inv_url,
         headers={"User-Agent": USER_AGENT_DE},
     )
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            data = r.read()
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
+            data = response.read()
     except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise _NonceRejectedError(str(exc)) from exc
         raise InventoryFetchError(f"HTTP {exc.code} fetching live inventory") from exc
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         raise InventoryFetchError(f"Could not fetch live inventory: {exc}") from exc
     try:
-        return json.loads(data), account_id
+        return json.loads(data)
     except json.JSONDecodeError as exc:
         raise InventoryFetchError(f"Invalid JSON from live inventory: {exc}") from exc
+
+
+def fetch_inventory() -> tuple[dict, str]:
+    """Scan Warframe memory for credentials and fetch the live inventory.
+
+    Candidate nonces are tried in frequency order so a stale heap copy does
+    not fail the refresh when a newer valid nonce is also present.
+
+    Returns:
+        ``(inventory_dict, account_id)``.
+    """
+    _log.info("Scanning Warframe memory for credentials...")
+    pid = find_warframe_pid()
+    candidates = _find_credentials_with_retry(pid)
+    _log.info("Found %s credential candidate(s); fetching live inventory...", len(candidates))
+
+    rejected = 0
+    for account_id, nonce in candidates:
+        try:
+            inventory = _fetch_inventory_with(account_id, nonce)
+        except _NonceRejectedError:
+            rejected += 1
+            continue
+        return inventory, account_id
+
+    raise InventoryFetchError(
+        f"Warframe rejected all {rejected} nonce candidate(s). "
+        "Return to the Orbiter and refresh again."
+    )
 
 
 def load_inventory(path: str) -> dict:
@@ -439,11 +484,14 @@ def load_inventory_with_fallback(
         try:
             atomic_write_json(inv_path, inv, indent=2)
         except OSError as exc:
-            print(f"warning: could not save inventory cache {inv_path}: {exc}", file=sys.stderr)
+            _log.warning("could not save inventory cache %s: %s", inv_path, exc)
         misc, rec, equip = inventory_summary(inv)
-        print(
-            f"  Inventory: {misc} items, {rec} recipes, {equip} equipment  (account: {account_id})",
-            file=sys.stderr,
+        _log.info(
+            "Inventory: %s items, %s recipes, %s equipment (account: %s)",
+            misc,
+            rec,
+            equip,
+            account_id,
         )
         return inv, account_id
     return load_inventory(inv_path), None

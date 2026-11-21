@@ -27,15 +27,52 @@ Data flow:
 from __future__ import annotations
 
 import math
-import re
-from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
+from warframe_profile.model.craft_index import (
+    build_items_by_un,
+    build_lookup,
+    build_recipes_by_result,
+    categorize,
+    compute_crafting_plan,
+    find_items,
+    get_recipe_components,
+    has_recipe,
+    is_blueprint_un,
+    merge_dicts,
+    resolve_name,
+    un_to_name,
+    weapon_name,
+)
 from warframe_profile.model.utils import normalize_path
+from warframe_profile.model.weapon_chains import build_weapon_chains
 
-if TYPE_CHECKING:
-    from warframe_profile.model.data import Inventory, ItemData
+__all__ = [
+    "CraftNode",
+    "CraftPlan",
+    "CraftTree",
+    "add_missing_blueprint_requirement",
+    "build_items_by_un",
+    "build_lookup",
+    "build_recipes_by_result",
+    "build_weapon_chains",
+    "categorize",
+    "compute_crafting_plan",
+    "decompose_raw_materials",
+    "display_name",
+    "find_items",
+    "get_recipe_components",
+    "has_recipe",
+    "is_blueprint_un",
+    "merge_dicts",
+    "postprocess_craft_plan",
+    "preserve_blueprints",
+    "resolve_name",
+    "resolve_tree",
+    "should_expand",
+    "un_to_name",
+    "weapon_name",
+]
 
 
 @dataclass
@@ -75,213 +112,6 @@ class CraftPlan:
 # "weapons", "recipes") into flat lookup dictionaries keyed by uniqueName.
 # They are called once at startup by presenters.
 #
-
-
-def build_items_by_un(db: dict) -> dict:
-    """Build a ``uniqueName.lower() → item`` lookup from the export.
-
-    Older databases store items in the raw per-category DE sections
-    (``warframes, weapons, resources, customs, gear, sentinels, keys``);
-    each item gets a ``_source`` key so :func:`categorize` can determine
-    the human-readable category later.  Newer, compact databases store the
-    already-merged ``items`` list instead, so fall back to that when the raw
-    sections are absent.
-
-    The key is lowercased uniqueName for case-insensitive lookups.
-    """
-    items: dict = {}
-    from warframe_profile.scripts.update_export_db import DE_ITEM_LABELS
-
-    raw_sections_present = any(isinstance(db.get(label), dict) for label in DE_ITEM_LABELS)
-    if raw_sections_present:
-        for label in DE_ITEM_LABELS:
-            for un, val in db.get(label, {}).items():
-                val["uniqueName"] = un
-                val["_source"] = label
-                items[un.lower()] = val
-        return items
-
-    for item in db.get("items", []):
-        # ``_source`` is only set for items that came from a DE item section;
-        # WFCD-only extras are intentionally excluded from the craft index.
-        if not item.get("_source"):
-            continue
-        un = item.get("uniqueName", "")
-        if un:
-            items[un.lower()] = item
-    return items
-
-
-def build_recipes_by_result(db: dict) -> dict:
-    """Build a ``resultType.lower() → recipe`` lookup.
-
-    The DE export stores recipes keyed by their uniqueName (like
-    ``/Lotus/Recipes/Weapons/LatoPrimeBlueprint``).  This function
-    re-indexes them by their ``resultType`` — the uniqueName of the
-    item produced — which is what the crafting tree resolver needs.
-
-    Only the first recipe per ``resultType`` is kept (duplicate
-    resultTypes are discarded).
-    """
-    by_result: dict = {}
-    for key, val in db.get("recipes", {}).items():
-        rt = val.get("resultType")
-        if rt and rt not in by_result:
-            by_result[rt.lower()] = {
-                "_recipeKey": key,
-                "ingredients": val.get("ingredients", []),
-                "num": val.get("num", 1) or 1,
-                "consumeOnUse": val.get("consumeOnUse", True),
-            }
-    return by_result
-
-
-# ---------------------------------------------------------------------------
-# Name resolution
-# ---------------------------------------------------------------------------
-
-
-def resolve_name(name: str, loc_dict: dict) -> str:
-    """Resolve a ``/Lotus/Language/...`` key to its human-readable form.
-
-    Falls back to the last path segment if the key is missing from
-    *loc_dict*.
-    """
-    if isinstance(name, str) and name.startswith("/Lotus/Language/"):
-        return loc_dict.get(name, name.split("/")[-1])
-    return name
-
-
-#: Maps in-game ``productCategory`` values to human-readable labels.
-_CATEGORY_BY_PC = {
-    "Suits": "Warframe",
-    "MechSuits": "Necramech",
-    "LongGuns": "Primary",
-    "Pistols": "Secondary",
-    "Melee": "Melee",
-    "SpaceGuns": "Arch-Gun",
-    "SpaceMelee": "Arch-Melee",
-    "SpaceSuits": "Archwing",
-    "Sentinels": "Sentinel",
-    "SentinelWeapons": "Sentinel Weapon",
-    "OperatorAmps": "Operator Amp",
-    "DrifterMelee": "Drifter Melee",
-    "Ships": "Ship",
-    "CrewShips": "Crew Ship",
-    "CrewShipWeaponSkins": "Ship Cosmetic",
-    "ShipDecorations": "Cosmetic",
-    "WeaponSkins": "Cosmetic",
-    "KubrowPets": "Pet",
-    "MoaPets": "Pet",
-    "FusionTreasures": "Curio",
-    "SpecialItems": "Special",
-    "SupplyDrop": "Supply",
-    "MiscItems": "Resources",
-}
-
-#: Fallback category labels when ``productCategory`` is unavailable,
-#: keyed by the ``_source`` label assigned during import.
-_SOURCE_CATEGORY_FALLBACK: dict[str, str] = {
-    "resources": "Resources",
-    "keys": "Keys",
-    "gear": "Gear",
-    "customs": "Cosmetic",
-}
-
-
-def categorize(item: dict) -> str:
-    """Return a human-readable category for *item*.
-
-    Uses ``productCategory`` first, then falls back to ``_source``.
-    """
-    pc = item.get("productCategory")
-    if pc:
-        return _CATEGORY_BY_PC.get(pc, str(pc))
-    source = item.get("_source", "")
-    return _SOURCE_CATEGORY_FALLBACK.get(source, "Misc")
-
-
-# ---------------------------------------------------------------------------
-# Recipe helpers
-# ---------------------------------------------------------------------------
-
-
-def has_recipe(item_un_lower: str, recipes_by_result: dict) -> bool:
-    """Check if an item has a known recipe."""
-    return item_un_lower in recipes_by_result
-
-
-def get_recipe_components(
-    item_un_lower: str,
-    items_by_un: dict,
-    recipes_by_result: dict,
-    loc_dict: dict | None = None,
-) -> list[dict]:
-    """Return the ingredient list for *item_un_lower*, with resolved names."""
-    recipe = recipes_by_result.get(item_un_lower)
-    if not recipe:
-        return []
-    _loc = loc_dict or {}
-    comps: list[dict] = []
-    for ing in recipe["ingredients"]:
-        ing_un = ing["ItemType"]
-        ing_item = items_by_un.get(ing_un.lower())
-        ing_name = resolve_name(ing_item.get("name", ""), _loc) if ing_item else ""
-        comps.append(
-            {
-                "uniqueName": ing_un,
-                "name": ing_name,
-                "itemCount": ing["ItemCount"],
-            }
-        )
-    return comps
-
-
-# ---------------------------------------------------------------------------
-# Search / lookup
-# ---------------------------------------------------------------------------
-# The ``craft`` sub-command supports name-based item search.  These
-# functions build a name index and find items by substring matching with
-# relevance scoring (exact → starts-with → word match → loose).
-#
-
-
-def build_lookup(items_by_un: dict, loc_dict: dict) -> dict:
-    """Build a ``name.lower() → [items]`` lookup for text search."""
-    by_name: dict = defaultdict(list)
-    for item in items_by_un.values():
-        name = resolve_name(item.get("name", ""), loc_dict)
-        if name:
-            item["_resolved_name"] = name
-            by_name[name.lower()].append(item)
-    return by_name
-
-
-def find_items(query: str, by_name: dict) -> list[dict]:
-    """Search items by name substring, returning results sorted by relevance.
-
-    Relevance scoring:
-        4 = exact match
-        3 = starts-with match
-        2 = word / hyphen-separated match
-        1 = loose substring match
-    """
-    q = query.lower()
-    results: list[tuple[int, dict]] = []
-    for name_lower, items in by_name.items():
-        if q in name_lower:
-            for item in items:
-                if name_lower == q:
-                    score = 4
-                elif name_lower.startswith(q):
-                    score = 3
-                elif f" {q}" in name_lower or f"-{q}" in name_lower:
-                    score = 2
-                else:
-                    score = 1
-                results.append((score, item))
-    results.sort(key=lambda x: (-x[0], len(x[1].get("_resolved_name", ""))))
-    return [item for _, item in results]
 
 
 # ---------------------------------------------------------------------------
@@ -442,31 +272,6 @@ def _merge_sub_into(dest: dict, sub: dict) -> None:
             dest[k] = dict(v)
 
 
-def _process_expanded_component(
-    comp_un: str,
-    total: int,
-    items_by_un: dict,
-    owned: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
-    depth: int,
-    max_depth: int,
-    parent_name: str | None,
-) -> tuple[dict, dict]:
-    """Recursively resolve a component that should be expanded."""
-    return resolve_tree(
-        comp_un,
-        total,
-        items_by_un,
-        owned,
-        recipes_by_result,
-        loc_dict,
-        depth + 1,
-        max_depth,
-        parent_name,
-    )
-
-
 def _process_unexpanded_component(
     comp_un_lower: str,
     total: int,
@@ -510,8 +315,9 @@ def resolve_tree(
     depth: int = 0,
     max_depth: int = 2,
     parent_name: str | None = None,
+    tree_parent: CraftTree | CraftNode | None = None,
 ) -> tuple[dict, dict]:
-    """Recursively resolve the full crafting tree for an item.
+    """Recursively resolve an item into requirements and an optional view tree.
 
     Returns ``(requirements, craftables)`` where:
 
@@ -569,17 +375,32 @@ def resolve_tree(
             and comp_owned < total
         )
 
+        node = None
+        if tree_parent is not None:
+            reusable = is_bp and not consumable
+            node = CraftNode(
+                name=display_name(comp, items_by_un, item_name, loc_dict),
+                quantity=comp_count if reusable else max(total, comp_count),
+                owned=comp_owned,
+                reusable=reusable,
+            )
+            if isinstance(tree_parent, CraftTree):
+                tree_parent.nodes.append(node)
+            else:
+                tree_parent.children.append(node)
+
         if expand:
-            sub, sub_craft = _process_expanded_component(
+            sub, sub_craft = resolve_tree(
                 comp_un,
                 total,
                 items_by_un,
                 owned,
                 recipes_by_result,
                 loc_dict,
-                depth,
+                depth + 1,
                 max_depth,
                 item_name,
+                tree_parent=node,
             )
             _merge_sub_into(result, sub)
             _merge_sub_into(craftables, sub_craft)
@@ -607,42 +428,6 @@ def resolve_tree(
 # ---------------------------------------------------------------------------
 
 
-def is_blueprint_un(un: str) -> bool:
-    """Check if a uniqueName represents a blueprint."""
-    return "/Blueprint" in un or un.lower().endswith("blueprint")
-
-
-_CAMEL_CASE_RE = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-
-
-def un_to_name(un: str) -> str:
-    """Convert a raw uniqueName to a rough display name."""
-    name = un.split("/")[-1]
-    name = name.replace("Component", "").replace("Blueprint", "")
-    name = _CAMEL_CASE_RE.sub(" ", name)
-    return name.strip()
-
-
-def weapon_name(un_lower: str, items_by_un: dict, loc_dict: dict) -> str:
-    """Return the display name for a weapon uniqueName."""
-    item = items_by_un.get(un_lower)
-    if item:
-        name = resolve_name(item.get("name", ""), loc_dict)
-        if name:
-            return name
-    return un_to_name(un_lower)
-
-
-def merge_dicts(acc: dict, src: dict, *fields: str) -> None:
-    """Merge *src* into *acc*, summing the named *fields* for duplicate keys."""
-    for k, v in src.items():
-        if k in acc:
-            for f in fields:
-                acc[k][f] += v.get(f, 0)
-        else:
-            acc[k] = dict(v)
-
-
 # ---------------------------------------------------------------------------
 # Post-processing pipeline
 # ---------------------------------------------------------------------------
@@ -655,19 +440,6 @@ def merge_dicts(acc: dict, src: dict, *fields: str) -> None:
 # 3. preserve_blueprints — ensures blueprint requirements that were replaced
 #    by raw materials are still shown if not yet owned.
 #
-
-
-def compute_crafting_plan(craftables: dict) -> dict:
-    """Compute ``num_crafts`` for each craftable from its remaining quantity.
-
-    *craftables* is mutated in place and returned.
-    """
-    for v in craftables.values():
-        bq = v.get("build_qty", 1) or 1
-        oq = v.get("owned", 0)
-        remaining = max(0, v["quantity"] - oq)
-        v["num_crafts"] = max(0, math.ceil(remaining / bq))
-    return craftables
 
 
 def decompose_raw_materials(
@@ -818,124 +590,3 @@ def postprocess_craft_plan(
 # helps players identify which weapons to keep (they're needed for the
 # upgrade) vs sell (they're dead ends).
 #
-
-
-def _build_weapon_graph(
-    recipes_by_result: dict,
-    weapon_uns: set[str],
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Build weapon dependency graph: ``builds_into`` and ``built_from``."""
-    builds_into: dict[str, list[str]] = defaultdict(list)
-    built_from: dict[str, list[str]] = defaultdict(list)
-
-    for result_un_lower, recipe in recipes_by_result.items():
-        if result_un_lower not in weapon_uns:
-            continue
-        for ing in recipe.get("ingredients", []):
-            ing_un_lower = ing["ItemType"].lower()
-            if ing_un_lower in weapon_uns:
-                builds_into[ing_un_lower].append(result_un_lower)
-                built_from[result_un_lower].append(ing_un_lower)
-
-    return builds_into, built_from
-
-
-def _find_chains(
-    weapon_uns: set[str],
-    builds_into: dict,
-    built_from: dict,
-) -> list[list[str]]:
-    """Walk dependency graph to find linear upgrade chains."""
-    roots = sorted(
-        un
-        for un in weapon_uns
-        if un in builds_into and (un not in built_from or not built_from[un])
-    )
-    chains: list[list[str]] = []
-    for root in roots:
-        chain = [root]
-        current = root
-        while current in builds_into and builds_into[current]:
-            nxt = builds_into[current][0]
-            chain.append(nxt)
-            current = nxt
-            if len(chain) > 20:
-                break
-        if len(chain) >= 2:
-            chains.append(chain)
-    return chains
-
-
-def _aggregate_chain_requirements(
-    chain: list[str],
-    item_data: ItemData,
-    inventory: Inventory,
-    all_requirements: dict,
-    all_craftables: dict,
-    max_depth: int,
-) -> None:
-    """Resolve crafting tree for one chain and merge into accumulators."""
-    final_un = chain[-1]
-    if inventory.is_owned(final_un):
-        return
-
-    req, craft = item_data.resolve_tree(final_un, 1, inventory, max_depth=max_depth)
-    merge_dicts(all_requirements, req, "quantity")
-    merge_dicts(all_craftables, craft, "quantity")
-
-    recipe = item_data.recipe_for(final_un)
-    if recipe:
-        bp_key = recipe.get("_recipeKey", "")
-        if bp_key:
-            bp_owned = inventory.count(bp_key)
-            if bp_owned < 1:
-                names = [item_data.weapon_name(un) for un in chain]
-                bp_name = f"{names[-1]} Blueprint"
-                key = bp_key.lower()
-                if key in all_requirements:
-                    all_requirements[key]["quantity"] = max(all_requirements[key]["quantity"], 1)
-                else:
-                    all_requirements[key] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
-
-
-def build_weapon_chains(
-    item_data: ItemData,
-    inventory: Inventory,
-    max_depth: int = 5,
-) -> tuple[list[list[str]], dict, dict, int]:
-    """Build weapon upgrade chains whose final weapon is not owned or crafting.
-
-    The returned chain list is already filtered, so both the CLI and the web
-    view can render it directly; the final integer mirrors its length.
-    """
-    from warframe_profile.model.analysis import WEAPON_CATEGORIES
-
-    weapon_uns = {
-        un_lower
-        for un_lower, item in item_data.items_by_un.items()
-        if categorize(item) in WEAPON_CATEGORIES
-    }
-
-    builds_into, built_from = _build_weapon_graph(item_data.recipes_by_result, weapon_uns)
-    chains = _find_chains(weapon_uns, builds_into, built_from)
-
-    all_requirements: dict[str, dict] = {}
-    all_craftables: dict[str, dict] = {}
-    shown_chains: list[list[str]] = []
-
-    for chain in chains:
-        if inventory.is_owned(chain[-1]):
-            continue
-        _aggregate_chain_requirements(
-            chain,
-            item_data,
-            inventory,
-            all_requirements,
-            all_craftables,
-            max_depth,
-        )
-        shown_chains.append(chain)
-
-    compute_crafting_plan(all_craftables)
-
-    return shown_chains, all_requirements, all_craftables, len(shown_chains)

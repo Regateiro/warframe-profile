@@ -70,7 +70,7 @@ The `Makefile` wraps the common workflows:
 |---|---|
 | `make install` | Install into the Poetry virtualenv (dev tools included) |
 | `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
-| `make check` | Lint + format check (CI-friendly) |
+| `make check` | Format, lint, and type check (CI-friendly) |
 | `make test` | Run the test suite (`pytest`) |
 | `make update` | Refresh the merged game database |
 | `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe-profile` |
@@ -315,8 +315,12 @@ warframe-profile/
         windows.py                           # Win32 API backend (ctypes)
       inventory.py                           # API fetching, cache, raw inventory helpers
       data.py                                # ItemData + Inventory (central data access)
-      analysis.py                            # Prime-map indexing & cross-reference analysis
-      craft_model.py                         # Item/recipe indices + craft-tree view models
+      analysis.py                            # Prime-map indexing & ducat analysis
+      relics.py                              # Relic coverage & missing-part analysis
+      cleanup.py                             # Excess/rebuyable cleanup analysis
+      craft_index.py                         # Item/recipe indices, names, search
+      craft_model.py                         # Craft-tree resolution + view models
+      weapon_chains.py                       # Weapon upgrade-chain discovery
       mastery.py                             # Mastery classification/report model
       mods.py                                # Missing-mod categorization/report model
       ...

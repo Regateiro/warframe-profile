@@ -18,13 +18,11 @@ use :meth:`Inventory.is_owned`.
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
-from functools import cached_property
+from functools import cache, cached_property
 from typing import TYPE_CHECKING
 
 from warframe_profile.model.craft_model import (
-    CraftNode,
     CraftPlan,
     CraftTree,
     add_missing_blueprint_requirement,
@@ -35,7 +33,6 @@ from warframe_profile.model.craft_model import (
     find_items,
     get_recipe_components,
     has_recipe,
-    is_blueprint_un,
     postprocess_craft_plan,
     resolve_name,
     resolve_tree,
@@ -131,7 +128,7 @@ class ItemData:
 
     def __init__(self, db: ExportDB) -> None:
         """Wrap an already-loaded :class:`ExportDB`."""
-        self.db = db
+        self._db = db
 
     @classmethod
     def from_path(cls, path: str, refresh: bool = False) -> ItemData:
@@ -147,22 +144,22 @@ class ItemData:
     @property
     def items(self) -> list[dict]:
         """The merged item list."""
-        return self.db.items
+        return self._db.items
 
     @property
     def recipes(self) -> dict:
         """Raw recipes keyed by recipe uniqueName."""
-        return self.db.recipes
+        return self._db.recipes
 
     @property
     def locale(self) -> dict:
         """Localisation dictionary (``/Lotus/Language/...`` keys)."""
-        return self.db.locale
+        return self._db.locale
 
     @property
-    def raw(self) -> dict:
-        """The full decoded export database."""
-        return self.db.raw
+    def _raw(self) -> dict:
+        """The full decoded export database (model-internal)."""
+        return self._db.raw
 
     # ------------------------------------------------------------------
     # Indexed lookups
@@ -171,12 +168,12 @@ class ItemData:
     @cached_property
     def items_by_un(self) -> dict[str, dict]:
         """``uniqueName.lower() -> item`` crafting index."""
-        return build_items_by_un(self.raw)
+        return build_items_by_un(self._raw)
 
     @cached_property
     def recipes_by_result(self) -> dict[str, dict]:
         """``resultType.lower() -> recipe`` crafting index."""
-        return build_recipes_by_result(self.raw)
+        return build_recipes_by_result(self._raw)
 
     @cached_property
     def by_name(self) -> dict[str, list[dict]]:
@@ -210,7 +207,7 @@ class ItemData:
     @cached_property
     def ingredient_to_results(self) -> dict[str, set[str]]:
         """Recipe ingredient uniqueName → set of result uniqueNames."""
-        from warframe_profile.model.analysis import build_ingredient_to_results
+        from warframe_profile.model.cleanup import build_ingredient_to_results
 
         return build_ingredient_to_results(self.recipes)
 
@@ -261,10 +258,16 @@ class ItemData:
         """Search items by name using the standard relevance ordering."""
         return find_items(query, self.by_name)
 
-    def components(self, un: str) -> list[dict]:
-        """Return the recipe ingredients for *un* with resolved names."""
-        return get_recipe_components(
-            un.lower(), self.items_by_un, self.recipes_by_result, self.locale
+    @cache
+    def components(self, un: str) -> tuple[dict, ...]:
+        """Return the recipe ingredients for *un* with resolved names.
+
+        The recipe components are shared by the display-tree resolver and the
+        requirement resolver, so parsing them once avoids duplicate work on
+        the Craft and Weapon Chains pages.
+        """
+        return tuple(
+            get_recipe_components(un.lower(), self.items_by_un, self.recipes_by_result, self.locale)
         )
 
     def has_recipe(self, un: str) -> bool:
@@ -301,64 +304,10 @@ class ItemData:
         quantity: int,
         inventory: Inventory,
         max_depth: int = 2,
-        depth: int = 0,
-        consumed: dict[str, int] | None = None,
     ) -> CraftTree:
         """Build a display-ready crafting tree for *un*."""
-        components = self.components(un) if self.has_recipe(un) else []
-        item_name = self.item_name(un)
-        recipe = self.recipe_for(un)
-
-        if recipe:
-            bp_key = recipe.get("_recipeKey", "")
-            if bp_key:
-                components = [
-                    {"uniqueName": bp_key, "name": f"{item_name} Blueprint", "itemCount": 1}
-                ] + components
-
-        tree = CraftTree(name=item_name or un_to_name(un))
-        if not components or not recipe or depth >= max_depth:
-            return tree
-
-        build_qty = recipe.get("num", 1) or 1
-        consumable = recipe.get("consumeOnUse", True)
-        num_crafts = max(1, math.ceil(quantity / build_qty))
-        consumed = consumed if consumed is not None else defaultdict(int)
-
-        for component in components:
-            comp_un = component.get("uniqueName", "")
-            comp_un_lower = comp_un.lower()
-            comp_count = component.get("itemCount", 1)
-            comp_name = self.name(component.get("name", ""))
-            is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
-            reusable = is_bp and not consumable
-            label_mult = 1 if reusable else num_crafts * comp_count
-
-            comp_owned = inventory.count(comp_un) - consumed[comp_un_lower]
-            consumed[comp_un_lower] += label_mult
-
-            children: list[CraftNode] = []
-            expand = self.should_expand(comp_un_lower, depth, max_depth, is_bp)
-            if expand and comp_owned < label_mult:
-                child_tree = self.craft_tree(
-                    comp_un,
-                    label_mult,
-                    inventory,
-                    max_depth=max_depth,
-                    depth=depth + 1,
-                    consumed=consumed,
-                )
-                children = child_tree.nodes
-
-            tree.nodes.append(
-                CraftNode(
-                    name=self.display_name(component, item_name),
-                    quantity=label_mult,
-                    owned=comp_owned,
-                    reusable=reusable,
-                    children=children,
-                )
-            )
+        tree = CraftTree(name=self.item_name(un))
+        self.resolve_tree(un, quantity, inventory, max_depth=max_depth, tree_parent=tree)
         return tree
 
     def craft_plan(
@@ -371,8 +320,14 @@ class ItemData:
         """Build a display-ready crafting plan (tree + requirements) for *un*."""
         item = self.item(un)
         name = self.item_name(un)
-        tree = self.craft_tree(un, quantity, inventory, max_depth=max_depth)
-        requirements, craftables = self.resolve_tree(un, quantity, inventory, max_depth=max_depth)
+        tree = CraftTree(name=name)
+        requirements, craftables = self.resolve_tree(
+            un,
+            quantity,
+            inventory,
+            max_depth=max_depth,
+            tree_parent=tree,
+        )
         self.add_missing_blueprint(un, name, requirements, inventory)
         requirements = self.finish_plan(requirements, craftables, inventory)
         return CraftPlan(
@@ -389,8 +344,9 @@ class ItemData:
         quantity: int,
         inventory: Inventory,
         max_depth: int = 2,
+        tree_parent=None,
     ) -> tuple[dict, dict]:
-        """Recursively resolve *un* into raw requirements and craftables."""
+        """Resolve raw requirements and optionally collect a display tree."""
         return resolve_tree(
             un,
             quantity,
@@ -399,6 +355,7 @@ class ItemData:
             self.recipes_by_result,
             self.locale,
             max_depth=max_depth,
+            tree_parent=tree_parent,
         )
 
     def add_missing_blueprint(
@@ -444,7 +401,7 @@ class Inventory:
         mastered: set[str] | None = None,
     ) -> None:
         """Wrap *raw* inventory data and link it to *item_data*."""
-        self.raw = raw
+        self._raw = raw
         self.item_data = item_data
         self._mastered_override = set(mastered) if mastered is not None else None
 
@@ -453,6 +410,10 @@ class Inventory:
         #: Every owned item/copy, including pending foundry results and with
         #: blueprints consumed by pending recipes subtracted.
         self.owned: dict[str, int] = _compute_owned(raw, self.pending)
+
+    def rebind(self, item_data: ItemData) -> Inventory:
+        """Return a new snapshot using the same raw inventory and new items."""
+        return Inventory(self._raw, item_data, mastered=self._mastered_override)
 
     # ------------------------------------------------------------------
     # Ownership primitives (the single source of truth)
@@ -464,7 +425,7 @@ class Inventory:
         result = {
             normalize_path(entry.get("ItemType", ""))
             for section in EQUIPMENT_SECTIONS
-            for entry in self.raw.get(section, [])
+            for entry in self._raw.get(section, [])
         }
         result |= self.mastered
         return result
@@ -498,7 +459,7 @@ class Inventory:
     def xp_by_path(self) -> dict[str, int]:
         """``normalised item path -> XP`` (XPInfo wins over inventory copies)."""
         xp: dict[str, int] = {}
-        for entry in self.raw.get("XPInfo") or []:
+        for entry in self._raw.get("XPInfo") or []:
             path = normalize_path(entry.get("ItemType") or "")
             if path:
                 xp.setdefault(path, entry.get("XP") or 0)
@@ -515,7 +476,7 @@ class Inventory:
                 for child in obj:
                     _walk(child)
 
-        _walk(self.raw)
+        _walk(self._raw)
         return xp
 
     @cached_property
@@ -535,7 +496,7 @@ class Inventory:
         """``component path -> Features bitmask`` for gilding checks."""
         features: dict[str, int | None] = {}
         for section in MODULAR_SECTIONS:
-            for item in self.raw.get(section) or []:
+            for item in self._raw.get(section) or []:
                 if not isinstance(item, dict):
                     continue
                 parts = item.get("ModularParts") or []
@@ -552,7 +513,7 @@ class Inventory:
         """Assembled/equipment paths (excluding loose ``MiscItems`` components)."""
         owned: set[str] = set()
         for section in OWNED_SECTIONS:
-            for entry in self.raw.get(section, []):
+            for entry in self._raw.get(section, []):
                 un = entry.get("ItemType", "")
                 if un:
                     owned.add(normalize_path(un))
@@ -564,7 +525,7 @@ class Inventory:
         """Modular component paths referenced by assembled items."""
         parts: set[str] = set()
         for section in OWNED_SECTIONS:
-            for entry in self.raw.get(section, []):
+            for entry in self._raw.get(section, []):
                 for part in entry.get("ModularParts") or []:
                     parts.add(normalize_path(part))
         return parts
@@ -588,17 +549,17 @@ class Inventory:
     @property
     def blueprints(self) -> list[dict]:
         """Blueprint entries currently in the inventory."""
-        return self.raw.get("Recipes", [])
+        return self._raw.get("Recipes", [])
 
     @property
     def components(self) -> list[dict]:
         """Loose component/resource entries in the inventory."""
-        return self.raw.get("MiscItems", [])
+        return self._raw.get("MiscItems", [])
 
     def equipment_entries(self, sections: list[str] | None = None):
         """Yield equipment entries from the requested (or default) sections."""
         for section in sections or EQUIPMENT_SECTIONS:
-            yield from self.raw.get(section, [])
+            yield from self._raw.get(section, [])
 
     # ------------------------------------------------------------------
     # Mods / relics / sub-crafts
@@ -607,13 +568,13 @@ class Inventory:
     def owned_mods(self, game_mod_paths: set[str] | None = None) -> dict[str, int]:
         """Owned mod counts, optionally restricted to known game mods."""
         owned: dict[str, int] = defaultdict(int)
-        for item in self.raw.get("RawUpgrades", []):
+        for item in self._raw.get("RawUpgrades", []):
             path = normalize_path(item.get("ItemType", ""))
             if not path or (game_mod_paths is not None and path not in game_mod_paths):
                 continue
             owned[path] += item.get("ItemCount", 1)
         for section in ("Upgrades", "FocusUpgrades"):
-            for item in self.raw.get(section, []):
+            for item in self._raw.get(section, []):
                 path = normalize_path(item.get("ItemType", ""))
                 if not path or (game_mod_paths is not None and path not in game_mod_paths):
                     continue
@@ -633,6 +594,20 @@ class Inventory:
                 continue
             relics[un] = relics.get(un, 0) + count
         return relics
+
+    @cached_property
+    def required_parts(self) -> list[tuple[dict, dict, int, int]]:
+        """Prime part requirements shared by relic and missing-part views."""
+        from warframe_profile.model.relics import _iter_required_parts
+
+        return list(_iter_required_parts(self.item_data, self))
+
+    @cached_property
+    def not_needed_part_names(self) -> set[str]:
+        """Reward names whose required copies are already covered."""
+        from warframe_profile.model.relics import _not_needed_part_names
+
+        return _not_needed_part_names(self.required_parts)
 
     @cached_property
     def extra_builds(self) -> dict[str, int]:
@@ -754,7 +729,7 @@ class Inventory:
     @cached_property
     def weapon_chains(self) -> tuple[list[list[str]], dict, dict, int]:
         """Unowned weapon upgrade chains and their aggregated requirements."""
-        from warframe_profile.model.craft_model import build_weapon_chains
+        from warframe_profile.model.weapon_chains import build_weapon_chains
 
         return build_weapon_chains(self.item_data, self)
 

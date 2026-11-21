@@ -34,9 +34,17 @@ jobs:
       - name: Smoke test
         run: dist\warframe-profile.exe --help
 
+      - name: Create checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\warframe-profile.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  warframe-profile.exe" | Set-Content dist\warframe-profile.exe.sha256
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: warframe-profile-windows-x64
-          path: dist/warframe-profile.exe
+          path: |
+            dist/warframe-profile.exe
+            dist/warframe-profile.exe.sha256
           if-no-files-found: error

@@ -11,6 +11,11 @@ MAX_IMAGE_REGION = 8 * 1024 * 1024
 #: Default maximum bytes to scan in an anonymous (heap) memory region.
 DEFAULT_MAX_REGION = 64 * 1024 * 1024
 
+#: Chunk size used when a region is scanned beyond the default limit.  Reading
+#: the region in chunks keeps memory use bounded while still allowing a full
+#: fallback scan when credentials are not found in the first pass.
+SCAN_CHUNK_SIZE = 16 * 1024 * 1024
+
 
 def scan_buffer(
     data: bytes,
@@ -51,3 +56,30 @@ def scan_buffer_all(
         high = min(len(data), index + context)
         yield base_address + index, data[low:high]
         index = data.find(needle, index + 1)
+
+
+def scan_region_chunks(
+    read,
+    start: int,
+    length: int,
+    needle: bytes,
+    context: int,
+    max_bytes: int | None,
+) -> Iterator[tuple[int, bytes]]:
+    """Yield matches from *read(offset, size)* across a memory region.
+
+    *max_bytes* limits how much of the region is scanned.  ``None`` scans the
+    whole region in bounded chunks, which is the fallback used when the fast
+    credential scan fails.
+    """
+    end = start + (length if max_bytes is None else min(length, max_bytes))
+    position = start
+    overlap = len(needle) + context
+    while position < end:
+        core = min(SCAN_CHUNK_SIZE, end - position)
+        read_size = min(core + overlap, end - position)
+        data = read(position, read_size)
+        for address, chunk in scan_buffer_all(data, needle, context, position):
+            if address < position + core:
+                yield address, chunk
+        position += core
