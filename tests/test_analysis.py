@@ -1,7 +1,9 @@
 """Tests for Prime-map indexing and the core ducat analysis."""
 
+from types import SimpleNamespace
+
 from warframe_profile.model.analysis import analyze, build_prime_map
-from warframe_profile.model.inventory import EQUIPMENT_SECTIONS
+from warframe_profile.model.data import Inventory, ItemData
 
 _LATO = "/Lotus/Weapons/Tenno/LatoPrime"
 _BARREL = "/Lotus/Weapons/Tenno/LatoPrimeBarrel"
@@ -40,6 +42,13 @@ def _prime_map() -> dict:
     return build_prime_map(_items())
 
 
+def _analyze(items: list[dict], inventory: dict, recipes: dict | None = None):
+    raw = {"items": items, "recipes": recipes or {}, "dict": {}}
+    db = SimpleNamespace(items=items, recipes=raw["recipes"], locale={}, raw=raw)
+    item_data = ItemData(db)
+    return analyze(item_data, Inventory(inventory, item_data))
+
+
 def test_build_prime_map_indexes_tradable_parts():
     prime_map = _prime_map()
 
@@ -59,7 +68,7 @@ def test_analyze_classifies_buildable_item_and_surplus():
         ]
     }
 
-    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_items(), inventory)
 
     assert result.missing == []
     assert len(result.items) == 1
@@ -74,7 +83,7 @@ def test_analyze_classifies_buildable_item_and_surplus():
 
 
 def test_analyze_reports_missing_prime_when_no_parts_owned():
-    result = analyze({}, _prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_items(), {})
 
     assert result.items == []
     assert [missing.name for missing in result.missing] == ["Lato Prime"]
@@ -84,7 +93,7 @@ def test_analyze_reports_missing_prime_when_no_parts_owned():
 def test_analyze_classifies_owned_copy():
     inventory = {"Pistols": [{"ItemType": _LATO}]}
 
-    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_items(), inventory)
 
     item = result.items[0]
     assert item.status == "have_copy"
@@ -95,7 +104,7 @@ def test_analyze_classifies_owned_copy():
 def test_analyze_classifies_partial_item():
     inventory = {"MiscItems": [{"ItemType": _BARREL, "ItemCount": 1}]}
 
-    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_items(), inventory)
 
     item = result.items[0]
     assert item.status == "partial"
@@ -119,7 +128,7 @@ def test_analyze_classifies_pending_item_as_crafting():
         "PendingRecipes": [{"ItemType": recipe_un}],
     }
 
-    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS, recipes=recipes)
+    result = _analyze(_items(), inventory, recipes)
 
     assert result.missing == []
     item = result.items[0]
@@ -143,7 +152,7 @@ def test_analyze_keeps_owned_item_owned_while_extra_copy_is_pending():
         "PendingRecipes": [{"ItemType": recipe_un}],
     }
 
-    result = analyze(inventory, _prime_map(), EQUIPMENT_SECTIONS, recipes=recipes)
+    result = _analyze(_items(), inventory, recipes)
 
     item = result.items[0]
     assert item.status == "have_copy"
@@ -161,8 +170,8 @@ _AK_BP = "/Lotus/Types/Recipes/Weapons/AkmagnusPrimeBlueprint"
 _AK_LINK = "/Lotus/Types/Recipes/Weapons/WeaponParts/AkmagnusPrimeLink"
 
 
-def _akimbo_prime_map() -> dict:
-    items = [
+def _akimbo_items() -> list[dict]:
+    return [
         {
             "uniqueName": _MAGNUS,
             "name": "Magnus Prime",
@@ -221,7 +230,10 @@ def _akimbo_prime_map() -> dict:
             ],
         },
     ]
-    return build_prime_map(items)
+
+
+def _akimbo_prime_map() -> dict:
+    return build_prime_map(_akimbo_items())
 
 
 def _akimbo_inventory(extra_misc: list[dict] | None = None, pistols: int = 1) -> dict:
@@ -239,7 +251,7 @@ def test_akimbo_is_partial_when_second_base_weapon_cannot_be_built():
     # One built Magnus Prime + a spare blueprint, but no Barrel or Receiver.
     inventory = _akimbo_inventory([{"ItemType": _MAG_BP, "ItemCount": 1}])
 
-    result = analyze(inventory, _akimbo_prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_akimbo_items(), inventory)
     akmagnus = next(i for i in result.items if i.name == "Akmagnus Prime")
 
     assert akmagnus.status == "partial"
@@ -257,7 +269,7 @@ def test_akimbo_is_buildable_when_spare_base_weapon_parts_are_owned():
         ]
     )
 
-    result = analyze(inventory, _akimbo_prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_akimbo_items(), inventory)
     akmagnus = next(i for i in result.items if i.name == "Akmagnus Prime")
 
     assert akmagnus.status == "buildable"
@@ -267,7 +279,7 @@ def test_akimbo_is_buildable_when_spare_base_weapon_parts_are_owned():
 def test_akimbo_is_buildable_with_two_built_base_weapons():
     inventory = _akimbo_inventory(pistols=2)
 
-    result = analyze(inventory, _akimbo_prime_map(), EQUIPMENT_SECTIONS)
+    result = _analyze(_akimbo_items(), inventory)
     akmagnus = next(i for i in result.items if i.name == "Akmagnus Prime")
 
     assert akmagnus.status == "buildable"

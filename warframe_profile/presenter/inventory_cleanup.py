@@ -11,21 +11,7 @@ Identifies items and parts you can safely sell:
 
 import sys
 
-from warframe_profile.model.analysis import (
-    build_item_index,
-    build_prime_map,
-    build_regular_to_prime_map,
-    compute_sellable_equipment,
-    find_excess_blueprints_and_components,
-    find_owned_item_uns,
-    find_owned_prime_uns,
-)
-from warframe_profile.model.inventory import (
-    EQUIPMENT_SECTIONS,
-    build_mastered_set,
-    load_data,
-)
-from warframe_profile.model.utils import normalize_path
+from warframe_profile.model.inventory import load_data
 from warframe_profile.view.report import (
     section_excess_blueprints_components,
     section_items_with_owned_prime,
@@ -37,33 +23,23 @@ def main(args) -> None:
     """Entry point for the inventory-cleanup sub-command.
 
     Flow:
-        1. Load data (ExportDB + inventory).
-        2. Build item index and Prime map.
-        3. Compute market-rebuyable equipment (safe to sell).
-        4. Build regular-to-Prime map and identify owned regular weapons
-           whose Prime variant is already owned (safe to sell).
-        5. Find excess blueprints and components (every crafting path
-           leads to an already-owned item).
-        6. Print all three sections.
+        1. Load ItemData + Inventory.
+        2. Compute market-rebuyable equipment (safe to sell).
+        3. Identify owned regular weapons whose Prime variant is also owned.
+        4. Find excess blueprints and components (every crafting path
+           leads to an owned/mastered/crafting item).
+        5. Print all three sections.
     """
-    db, inv, _account_id = load_data(
+    item_data, inventory, _account_id = load_data(
         args.items_cache,
         args.refresh_items,
         args.inventory,
         args.refresh,
     )
 
-    items = db.items
-    items_by_un = build_item_index(items)
+    print(f"  {len(item_data.prime_map)} prime items indexed", file=sys.stderr)
 
-    prime_map = build_prime_map(items)
-    print(f"  {len(prime_map)} prime items indexed", file=sys.stderr)
-
-    sellable = compute_sellable_equipment(db, inv, EQUIPMENT_SECTIONS)
-
-    reg_to_prime = build_regular_to_prime_map(items)
-    owned_regular = find_owned_item_uns(inv, items_by_un, EQUIPMENT_SECTIONS)
-    owned_primes = find_owned_prime_uns(inv, prime_map, EQUIPMENT_SECTIONS)
+    sellable = inventory.sellable_equipment
 
     print()
     print("=" * 72)
@@ -72,28 +48,5 @@ def main(args) -> None:
     print()
 
     section_sellable_equipment(sellable)
-    section_items_with_owned_prime(
-        owned_regular,
-        reg_to_prime,
-        owned_primes,
-        items_by_un,
-    )
-
-    owned_finished: set[str] = {
-        normalize_path(eq.get("ItemType", ""))
-        for sect in EQUIPMENT_SECTIONS
-        for eq in inv.get(sect, [])
-    }
-    mastered = build_mastered_set(inv)
-    if mastered:
-        owned_finished |= mastered
-
-    excess = find_excess_blueprints_and_components(
-        inv,
-        items_by_un,
-        db.recipes,
-        owned_finished,
-        db.locale,
-        mastered=mastered,
-    )
-    section_excess_blueprints_components(excess)
+    section_items_with_owned_prime(inventory.owned_prime_pairs)
+    section_excess_blueprints_components(inventory.excess_items)

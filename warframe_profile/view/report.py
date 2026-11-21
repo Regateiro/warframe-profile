@@ -17,8 +17,6 @@ This module is the **terminal view** in the MVP pattern.  Web rendering
 lives in :mod:`warframe_profile.view.web.templates`.
 """
 
-import math
-from collections import defaultdict
 from typing import Literal
 
 from prettytable import PrettyTable, TableStyle
@@ -27,42 +25,14 @@ from warframe_profile.compat import color_enabled, enable_windows_vt
 from warframe_profile.model.analysis import (
     AnalysisResult,
     ExcessItem,
-    ItemResult,
     NeededPart,
     RelicInfo,
     SellableEquipment,
 )
-from warframe_profile.model.craft_model import (
-    display_name,
-    get_recipe_components,
-    has_recipe,
-    is_blueprint_un,
-    resolve_name,
-    should_expand,
-    un_to_name,
-)
-from warframe_profile.model.utils import normalize_path
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _build_sell_dict(
-    items: list[ItemResult],
-) -> dict[tuple[str, str], dict[str, int]]:
-    """Aggregate surplus parts into a ``{(item_name, part_name): info}`` dict.
-
-    Only parts with a positive surplus *and* ducat value are included.
-    """
-    sell: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {"count": 0, "ducats": 0})
-    for item in items:
-        for p in item.parts:
-            if p.surplus > 0 and p.ducats > 0:
-                key = (item.name, p.name)
-                sell[key]["count"] += p.surplus
-                sell[key]["ducats"] = p.ducats
-    return sell
 
 
 def _new_table(
@@ -216,9 +186,9 @@ def is_prime_part(name: str) -> bool:
     return "Prime" in name
 
 
-def _print_sell_ducats_section(items, total_safe) -> None:
+def _print_sell_ducats_section(data: AnalysisResult) -> None:
     """Print the 'Sell for Ducats' table."""
-    sell = _build_sell_dict(items)
+    sell = data.surplus_parts()
     if not sell:
         return
     print()
@@ -238,7 +208,7 @@ def _print_sell_ducats_section(items, total_safe) -> None:
             ],
             divider=idx == len(sorted_items) - 1,
         )
-    t.add_row(["TOTAL", "", "", total_safe])
+    t.add_row(["TOTAL", "", "", data.total_ducats_safe])
     print(t)
 
 
@@ -254,7 +224,7 @@ def print_report(data: AnalysisResult) -> None:
     _print_summary_line(data.items, data.total_ducats_safe, data.total_ducats_keep)
     _print_buildable_section(data.items)
     _print_excess_parts_section(relevant, n_silent)
-    _print_sell_ducats_section(data.items, data.total_ducats_safe)
+    _print_sell_ducats_section(data)
 
     print()
     print("=" * 60)
@@ -316,7 +286,7 @@ def print_needed_drops(needed: list[NeededPart]) -> None:
 
         if n.drops:
             # Group drops by relic name, show tiers
-            drops_str = ", ".join(f"{name} x{count}" for name, count, _ in n.drops)
+            drops_str = ", ".join(f"{name} x{count}" for name, count, _, _ in n.drops)
         else:
             drops_str = "\u2014"
 
@@ -371,28 +341,12 @@ def section_excess_blueprints_components(excess: list[ExcessItem]) -> None:
     print()
 
 
-def section_items_with_owned_prime(
-    owned_regular: set[str],
-    reg_to_prime: dict[str, dict],
-    owned_primes: set[str],
-    items_by_un: dict[str, dict],
-) -> None:
+def section_items_with_owned_prime(pairs: list[tuple[str, str, str]]) -> None:
     """Print the "Items to Sell (Own Prime Variant)" table."""
-    rows: list[dict[str, str]] = []
-    for reg_un in owned_regular:
-        prime_info = reg_to_prime.get(reg_un)
-        if not prime_info:
-            continue
-        if prime_info["prime_un"] in owned_primes:
-            item = items_by_un.get(normalize_path(reg_un), {})
-            rows.append(
-                {
-                    "name": item.get("name", reg_un),
-                    "category": item.get("category", ""),
-                    "prime_name": prime_info["prime_name"],
-                }
-            )
-
+    rows = [
+        {"name": name, "category": category, "prime_name": prime_name}
+        for name, category, prime_name in pairs
+    ]
     if not rows:
         return
 
@@ -402,8 +356,8 @@ def section_items_with_owned_prime(
         [("Item", "l"), ("Category", "l"), ("Prime Variant Owned", "l")],
         title="Items to Sell (Own Prime Variant)",
     )
-    for r in rows:
-        t.add_row([r["name"], r["category"], r["prime_name"]])
+    for row in rows:
+        t.add_row([row["name"], row["category"], row["prime_name"]])
     print(t)
     print()
 
@@ -432,155 +386,24 @@ def craft_color_for_owned(owned_qty: int, needed: int) -> str:
     return RED
 
 
-def _prepare_components_with_bp(
-    item_name: str,
-    recipe: dict,
-    components: list,
-) -> list:
-    """Prepend the Blueprint component when the item has a recipe key."""
-    if not recipe:
-        return components
-    bp_key = recipe.get("_recipeKey", "")
-    if not bp_key:
-        return components
-    return [
-        {"uniqueName": bp_key, "name": f"{item_name} Blueprint", "itemCount": 1},
-        *components,
-    ]
-
-
-def _compute_print_crafts(
-    quantity: int,
-    owned_qty: int,
-    build_qty: int,
-    depth: int,
-) -> int:
-    """Return the effective number of crafts to display."""
-    num_crafts = max(1, math.ceil(quantity / build_qty))
-    if depth > 0:
-        remaining_qty = max(0, quantity - owned_qty)
-        return max(0, math.ceil(remaining_qty / build_qty)) if remaining_qty > 0 else 0
-    return num_crafts
-
-
-def _print_component_line(
-    comp: dict,
-    index: int,
-    total_components: int,
-    prefix: str,
-    item_name: str,
-    effective_crafts: int,
-    consumable: bool,
-    items_by_un: dict,
-    owned: dict,
-    consumed: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
-    depth: int,
-    max_depth: int,
-) -> None:
-    """Print one component line and recurse if it should be expanded."""
-    comp_un = comp.get("uniqueName", "")
-    comp_un_lower = comp_un.lower()
-    comp_count = comp.get("itemCount", 1)
-    comp_name = resolve_name(comp.get("name", ""), loc_dict)
-
-    is_last = index == total_components - 1
+def _print_node(node, prefix: str, is_last: bool) -> None:
+    """Print one display-ready craft node and recurse into its children."""
     connector = "\u2514\u2500 " if is_last else "\u251c\u2500 "
     child_prefix = prefix + ("    " if is_last else "\u2502   ")
-
-    is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
-    reusable = is_bp and not consumable
-    label_mult = 1 if reusable else effective_crafts * comp_count
-
-    comp_display = display_name(comp, items_by_un, item_name, loc_dict)
-    label = f"{comp_display} x{label_mult}"
-    if reusable:
+    label = f"{node.name} x{node.quantity}"
+    if node.reusable:
         label += " (reusable)"
-
-    comp_owned_qty = max(0, owned.get(normalize_path(comp_un), 0) - consumed[comp_un_lower])
-    consumed[comp_un_lower] += label_mult
-
-    color = craft_color_for_owned(comp_owned_qty, label_mult)
-
-    expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
-        comp_owned_qty >= label_mult
-    )
-
+    color = craft_color_for_owned(node.owned, node.quantity)
     print(f"{prefix}{connector}{color}{label}{RESET}")
-    if expand:
-        print_craft_tree(
-            comp_un,
-            label_mult,
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
-            depth + 1,
-            max_depth,
-            child_prefix,
-        )
+    for index, child in enumerate(node.children):
+        _print_node(child, child_prefix, index == len(node.children) - 1)
 
 
-def print_craft_tree(
-    item_un,
-    quantity,
-    items_by_un,
-    owned,
-    recipes_by_result,
-    loc_dict,
-    depth=0,
-    max_depth=2,
-    prefix="",
-) -> None:
-    """Recursively print a colour-coded crafting tree to stdout."""
-    item_un_lower = item_un.lower()
-    item = items_by_un.get(item_un_lower)
-
-    components = (
-        get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
-        if has_recipe(item_un_lower, recipes_by_result)
-        else []
-    )
-
-    item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
-    if not item_name:
-        item_name = un_to_name(item_un)
-
-    owned_qty = owned.get(normalize_path(item_un), 0)
-
-    if depth == 0:
-        print(f"{RED}\u25a0 {item_name}{RESET}")
-
-    recipe = recipes_by_result.get(item_un_lower)
-    if recipe:
-        components = _prepare_components_with_bp(item_name, recipe, components)
-
-    if not components or not recipe:
-        return
-
-    build_qty = recipe.get("num", 1) or 1
-    consumable = recipe.get("consumeOnUse", True)
-    effective_crafts = _compute_print_crafts(quantity, owned_qty, build_qty, depth)
-
-    consumed = defaultdict(int)
-    for i, comp in enumerate(components):
-        _print_component_line(
-            comp,
-            i,
-            len(components),
-            prefix,
-            item_name,
-            effective_crafts,
-            consumable,
-            items_by_un,
-            owned,
-            consumed,
-            recipes_by_result,
-            loc_dict,
-            depth,
-            max_depth,
-        )
+def print_craft_tree(tree) -> None:
+    """Print a display-ready :class:`CraftTree` to stdout."""
+    print(f"{RED}\u25a0 {tree.name}{RESET}")
+    for index, node in enumerate(tree.nodes):
+        _print_node(node, "", index == len(tree.nodes) - 1)
 
 
 def print_craft_summary(requirements: dict, craftables: dict) -> None:

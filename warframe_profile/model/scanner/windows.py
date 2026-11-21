@@ -24,6 +24,7 @@ Notes:
 from __future__ import annotations
 
 import ctypes
+from collections.abc import Iterator
 from typing import Any
 
 from warframe_profile.model.errors import WarframeNotRunningError
@@ -31,7 +32,7 @@ from warframe_profile.model.scanner._common import (
     DEFAULT_MAX_REGION,
     MAX_IMAGE_REGION,
     WARFRAME_PROCESS_NAME,
-    scan_buffer,
+    scan_buffer_all,
 )
 
 # ---------------------------------------------------------------------------
@@ -275,13 +276,13 @@ def _read_region(handle: int, address: int, size: int) -> bytes:
     return buffer.raw[: bytes_read.value]
 
 
-def find_in_memory(
+def iter_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
     max_per_region: int = DEFAULT_MAX_REGION,
-) -> tuple[int | None, bytes | None]:
-    """Search a process's address space for an ASCII *pattern*.
+) -> Iterator[tuple[int, bytes]]:
+    """Yield every occurrence of an ASCII *pattern* in a process's memory.
 
     Walks the target's memory regions with ``VirtualQueryEx`` and scans
     each readable committed region with ``ReadProcessMemory``.  Private
@@ -291,11 +292,11 @@ def find_in_memory(
     Args:
         pid: Target process ID.
         pattern: ASCII string to locate.
-        context: Number of extra bytes to return around the match.
+        context: Number of extra bytes to return around each match.
         max_per_region: Maximum bytes to scan per private region.
 
-    Returns:
-        ``(address, surrounding_bytes)`` or ``(None, None)``.
+    Yields:
+        ``(address, surrounding_bytes)`` for every match, in memory order.
 
     Raises:
         WarframeNotRunningError: if the process cannot be opened or this is
@@ -336,9 +337,7 @@ def find_in_memory(
                 size = min(region_size, limit)
                 if size > 0:
                     data = _read_region(handle, base, size)
-                    match = scan_buffer(data, needle, context, base)
-                    if match is not None:
-                        return match
+                    yield from scan_buffer_all(data, needle, context, base)
 
             next_address = base + region_size
             if next_address <= address:
@@ -347,4 +346,33 @@ def find_in_memory(
     finally:
         kernel32.CloseHandle(handle)
 
-    return None, None
+
+def find_in_memory(
+    pid: int,
+    pattern: str,
+    context: int = 256,
+    max_per_region: int = DEFAULT_MAX_REGION,
+) -> tuple[int | None, bytes | None]:
+    """Search a process's address space for an ASCII *pattern*.
+
+    Returns only the first match.  Use :func:`iter_in_memory` when every
+    occurrence is needed.
+
+    Args:
+        pid: Target process ID.
+        pattern: ASCII string to locate.
+        context: Number of extra bytes to return around the match.
+        max_per_region: Maximum bytes to scan per private region.
+
+    Returns:
+        ``(address, surrounding_bytes)`` or ``(None, None)``.
+
+    Raises:
+        WarframeNotRunningError: if the process cannot be opened or this is
+            a 32-bit interpreter (Warframe is 64-bit).
+    """
+    matches = iter_in_memory(pid, pattern, context, max_per_region)
+    try:
+        return next(matches, (None, None))
+    finally:
+        matches.close()

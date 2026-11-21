@@ -6,8 +6,8 @@ wrapped in the shared dark-theme page layout (:func:`_page`).
 
 The page layout includes:
     - GitHub-dark inspired CSS theme.
-    - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Mastery,
-      Mods, Cleanup).
+    - Navigation tabs (Home, Ducats, Primes, Relics, Craft, Weapon Chains,
+      Mastery, Mods, Cleanup).
     - Refresh Inventory button (POSTs to /refresh).
     - Subtab bars for views with multiple sub-sections (relics, mastery,
       cleanup).
@@ -16,24 +16,9 @@ This module is the **web view** in the MVP pattern.
 """
 
 import html
-import math
 from collections import defaultdict
 from urllib.parse import quote_plus
 
-from warframe_profile.model.craft_model import (
-    add_missing_blueprint_requirement,
-    display_name,
-    get_recipe_components,
-    has_recipe,
-    is_blueprint_un,
-    postprocess_craft_plan,
-    resolve_name,
-    resolve_tree,
-    should_expand,
-    un_to_name,
-    weapon_name,
-)
-from warframe_profile.model.utils import normalize_path
 from warframe_profile.view.report import part_label
 
 GREEN = "#27ae60"
@@ -101,7 +86,7 @@ _PAGE_STYLES = f"""<style>
   .flash {{ padding: 10px 14px; border-radius: 6px; margin: 12px 0;
            background: #1f6feb22; border: 1px solid #1f6feb; color: #58a6ff; }}
   .flash-error {{ background: {RED}22; border-color: {RED}; color: {RED}; }}
-  .notice {{ position: fixed; top: 16px; right: 16px; z-index: 1000;
+  .notice {{ position: fixed; bottom: 16px; right: 16px; z-index: 1000;
             max-width: 380px; margin: 0; display: flex; gap: 12px;
             align-items: flex-start; box-shadow: 0 8px 24px #0008; }}
   .notice button {{ background: transparent; border: none; color: inherit;
@@ -145,7 +130,7 @@ _NOTICE_JS = """<script>
   const nav = document.querySelector("nav");
   if (nav) nav.after(notice);
   else document.body.prepend(notice);
-  setTimeout(() => notice.remove(), 15000);
+  setTimeout(() => notice.remove(), 5000);
 })();
 </script>"""
 
@@ -218,6 +203,7 @@ def _page(title: str, content: str, active: str) -> str:
     tabs = [
         ("home", "Home", "/"),
         ("ducats", "Ducats", "/ducats"),
+        ("primes", "Primes", "/primes"),
         ("relics", "Relics", "/relics"),
         ("craft", "Craft", "/craft"),
         ("weapon-chains", "Weapon Chains", "/weapon-chains"),
@@ -287,12 +273,9 @@ def relic_category_slug(category: str) -> str:
 
 def relic_category_tabs(needed) -> list[tuple[str, str, str]]:
     """Return the Relics subtabs: Safe to Spam first, then needed categories."""
-    categories = {n.category for n in needed if n.category}
-    ordered = [c for c in _RELIC_CATEGORY_ORDER if c in categories]
-    ordered.extend(sorted(categories - set(ordered)))
-
+    categories = {item.category for item in needed if item.category}
     tabs = [("safe", "Safe to Spam", "/relics")]
-    for category in ordered:
+    for category in _ordered_group_keys(categories, _RELIC_CATEGORY_ORDER):
         slug = relic_category_slug(category)
         tabs.append((slug, category, f"/relics/needed/{slug}"))
     return tabs
@@ -318,6 +301,7 @@ def render_home() -> str:
 <div class="flash">Select a tab above to explore your Warframe profile.</div>
 <ul style="margin-left:20px;line-height:1.8">
   <li><strong>Ducats</strong> — Surplus Prime parts to sell at Baro Ki'Teer</li>
+  <li><strong>Primes</strong> — Missing Prime parts and the relics that can drop them</li>
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
@@ -359,118 +343,22 @@ def _craft_color(owned: int, needed: int) -> str:
     return "red"
 
 
-def _tree_component_html(
-    comp: dict,
-    effective_crafts: int,
-    consumable: bool,
-    items_by_un: dict,
-    owned: dict,
-    consumed: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
-    depth: int,
-    max_depth: int,
-    item_name: str,
-) -> str:
-    """Build the HTML fragment for one component in the tree."""
-    comp_un = comp.get("uniqueName", "")
-    comp_un_lower = comp_un.lower()
-    comp_count = comp.get("itemCount", 1)
-    comp_name = resolve_name(comp.get("name", ""), loc_dict)
-    is_bp = "blueprint" in comp_name.lower() or is_blueprint_un(comp_un)
-    reusable = is_bp and not consumable
-    label_mult = 1 if reusable else effective_crafts * comp_count
-
-    comp_display = display_name(comp, items_by_un, item_name, loc_dict)
-    label = f"{comp_display} x{label_mult}"
-    if reusable:
+def _node_html(node) -> str:
+    """Render one display-ready craft node and its children."""
+    label = f"{node.name} x{node.quantity}"
+    if node.reusable:
         label += " (reusable)"
-
-    comp_owned_qty = owned.get(normalize_path(comp_un), 0) - consumed[comp_un_lower]
-    consumed[comp_un_lower] += label_mult
-
-    cls = _craft_color(comp_owned_qty, label_mult)
+    cls = _craft_color(node.owned, node.quantity)
     parts = [f'<div class="tree-item"><span class="{cls}">{_esc(label)}</span></div>']
-
-    expand = should_expand(comp_un_lower, recipes_by_result, depth, max_depth, is_bp) and not (
-        comp_owned_qty >= label_mult
-    )
-    if expand:
-        sub = _tree_html(
-            comp_un,
-            label_mult,
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
-            depth + 1,
-            max_depth,
-        )
-        if sub:
-            parts.append(f'<div class="tree">{sub}</div>')
-
+    if node.children:
+        inner = "".join(_node_html(child) for child in node.children)
+        parts.append(f'<div class="tree">{inner}</div>')
     return "".join(parts)
 
 
-def _tree_html(
-    item_un: str,
-    quantity: int,
-    items_by_un: dict,
-    owned: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
-    depth: int = 0,
-    max_depth: int = 2,
-) -> str:
-    """Build recursive HTML crafting tree for *item_un* up to *max_depth*."""
-    lines: list[str] = []
-    item_un_lower = item_un.lower()
-    item = items_by_un.get(item_un_lower)
-
-    components = (
-        get_recipe_components(item_un_lower, items_by_un, recipes_by_result, loc_dict)
-        if has_recipe(item_un_lower, recipes_by_result)
-        else []
-    )
-
-    item_name = resolve_name(item.get("name", ""), loc_dict) if item else un_to_name(item_un)
-    if not item_name:
-        item_name = un_to_name(item_un)
-
-    recipe = recipes_by_result.get(item_un_lower)
-    if recipe:
-        bp_key = recipe.get("_recipeKey", "")
-        if bp_key:
-            components = [
-                {"uniqueName": bp_key, "name": f"{item_name} Blueprint", "itemCount": 1}
-            ] + components
-
-    if not components or not recipe:
-        return ""
-
-    build_qty = recipe.get("num", 1) or 1
-    consumable = recipe.get("consumeOnUse", True)
-    num_crafts = max(1, math.ceil(quantity / build_qty))
-
-    consumed = defaultdict(int)
-    for comp in components:
-        lines.append(
-            _tree_component_html(
-                comp,
-                num_crafts,
-                consumable,
-                items_by_un,
-                owned,
-                consumed,
-                recipes_by_result,
-                loc_dict,
-                depth,
-                max_depth,
-                item_name,
-            )
-        )
-
-    return "".join(lines)
+def _tree_html(tree) -> str:
+    """Render a display-ready :class:`CraftTree`."""
+    return "".join(_node_html(node) for node in tree.nodes)
 
 
 def _craft_summary_html(requirements: dict, craftables: dict) -> str:
@@ -538,16 +426,9 @@ def _craft_summary_html(requirements: dict, craftables: dict) -> str:
 
 def render_ducats(data) -> str:
     """Render the Ducats tab (surplus parts with ducat values)."""
-    items = data.items
     total_safe = data.total_ducats_safe
 
-    sell: dict = defaultdict(lambda: {"count": 0, "ducats": 0})
-    for item in items:
-        for p in item.parts:
-            if p.surplus > 0 and p.ducats > 0:
-                key = (item.name, p.name)
-                sell[key]["count"] += p.surplus
-                sell[key]["ducats"] = p.ducats
+    sell = data.surplus_parts()
 
     if not sell:
         return _page(
@@ -573,6 +454,145 @@ def render_ducats(data) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Primes
+# ---------------------------------------------------------------------------
+# One combined list of every missing Prime part with the owned relics that can
+# drop it. Subtabs regroup the same rows by item type (default), relic age, or
+# drop rarity.
+#
+
+_PRIMES_SUBTABS = [
+    ("type", "Type", "/primes"),
+    ("age", "Relic Age", "/primes/age"),
+    ("rarity", "Rarity", "/primes/rarity"),
+]
+
+#: Relic ages in display order (the DE tier codes mapped by the model).
+_PRIMES_AGE_ORDER = ("Lith", "Meso", "Neo", "Axi")
+
+#: Relic drop rarities in display order.
+_PRIMES_RARITY_ORDER = ("Common", "Uncommon", "Rare")
+
+#: Group heading for missing parts that no owned relic can drop.
+_PRIMES_NO_RELIC_LABEL = "No owned relic drops"
+
+
+def _ordered_group_keys(keys, preferred, *, last: str = "") -> list[str]:
+    """Order group *keys* by *preferred*, then alphabetically, with *last* last."""
+    ordered = [k for k in preferred if k in keys]
+    rest = sorted(set(keys) - set(ordered))
+    if last in rest:
+        rest.remove(last)
+        rest.append(last)
+    return ordered + rest
+
+
+def _primes_drops_cell(drops) -> str:
+    """Render the owned-relic drop list for one part."""
+    if not drops:
+        return '<span class="dim">\u2014</span>'
+    return _esc(", ".join(f"{name} x{count}" for name, count, _, _ in drops))
+
+
+def _primes_table(rows, *, show_type: bool = False) -> str:
+    """Render a missing-part table from ``(NeededPart, drops)`` rows."""
+    type_head = "<th>Type</th>" if show_type else ""
+    body = "".join(
+        f"<tr><td>{_esc(n.part_name)}</td><td>{_esc(n.item_name)}</td>"
+        f"{f'<td>{_esc(n.category)}</td>' if show_type else ''}"
+        f'<td class="num">x{n.missing}</td>'
+        f'<td class="num">{n.ducats or ""}</td>'
+        f"<td>{_primes_drops_cell(drops)}</td></tr>"
+        for n, drops in sorted(rows, key=lambda row: (row[0].item_name, row[0].part_type))
+    )
+    return f"""<table><thead><tr><th>Part</th><th>Item</th>{type_head}<th class='num'>Need</th>
+<th class='num'>Duc</th><th>Owned Relic Drops</th></tr></thead>
+<tbody>{body}</tbody></table>"""
+
+
+def _primes_grouped(needed, group_key, order, *, show_type: bool = True) -> str:
+    """Group missing parts by a drop attribute, filtered to that group.
+
+    A part is repeated under every age/rarity it can drop at, and shown once
+    under :data:`_PRIMES_NO_RELIC_LABEL` when no owned relic drops it.
+    """
+    groups: dict[str, list] = defaultdict(list)
+    for n in needed:
+        buckets: dict[str, list] = defaultdict(list)
+        for drop in n.drops:
+            buckets[group_key(drop)].append(drop)
+        if not buckets:
+            groups[_PRIMES_NO_RELIC_LABEL].append((n, n.drops))
+        else:
+            for key, drops in buckets.items():
+                groups[key].append((n, drops))
+
+    parts = []
+    for key in _ordered_group_keys(groups, order, last=_PRIMES_NO_RELIC_LABEL):
+        parts.append(f"<h3>{_esc(key)}</h3>")
+        parts.append(_primes_table(groups[key], show_type=show_type))
+    return "".join(parts)
+
+
+def render_primes(needed, view: str = "type") -> str:
+    """Render the Primes tab, grouped by type, relic age, or drop rarity."""
+    if not needed:
+        return _page(
+            "Primes",
+            '<div class="flash">No Prime parts are missing \u2014 you have every part '
+            "needed for the Prime items in your crafting plans.</div>",
+            "primes",
+        )
+
+    with_relics = sum(1 for n in needed if n.drops)
+    intro = (
+        f"<p>{len(needed)} missing Prime part{'s' if len(needed) != 1 else ''}"
+        f" &middot; {with_relics} can drop from an owned relic.</p>"
+    )
+
+    if view == "age":
+        body = _primes_grouped(
+            needed,
+            lambda drop: drop[2] or "Unknown age",
+            _PRIMES_AGE_ORDER,
+        )
+        note = (
+            '<p class="dim">Parts appear under every relic age that can drop them; '
+            "each drop list is filtered to that age.</p>"
+        )
+        title = "Primes \u2014 Relic Age"
+    elif view == "rarity":
+        body = _primes_grouped(
+            needed,
+            lambda drop: drop[3] or "Unknown rarity",
+            _PRIMES_RARITY_ORDER,
+        )
+        note = (
+            '<p class="dim">Parts appear under every drop rarity across your owned '
+            "relics; each drop list is filtered to that rarity.</p>"
+        )
+        title = "Primes \u2014 Rarity"
+    else:
+        view = "type"
+        by_category: dict[str, list] = defaultdict(list)
+        for n in needed:
+            by_category[n.category or "Other"].append((n, n.drops))
+
+        ordered = _ordered_group_keys(by_category, _RELIC_CATEGORY_ORDER)
+        body = "".join(
+            f"<h3>{_esc(category)}</h3>{_primes_table(by_category[category])}"
+            for category in ordered
+        )
+        note = ""
+        title = "Primes"
+
+    content = (
+        _subtab_bar(_PRIMES_SUBTABS, view) + "<h2>Missing Prime Parts</h2>" + intro + note + body
+    )
+    return _page(title, content, "primes")
+
+
+# ---------------------------------------------------------------------------
 # Relics
 # ---------------------------------------------------------------------------
 # Safe to Spam (default) plus one subtab per needed-drop item category:
@@ -588,7 +608,7 @@ def render_relics_needed(needed, category_slug: str) -> str:
     def _drops_cell(part) -> str:
         if not part.drops:
             return "—"
-        return _esc(", ".join(f"{name} x{count}" for name, count, _ in part.drops))
+        return _esc(", ".join(f"{name} x{count}" for name, count, _, _ in part.drops))
 
     parts = []
     if items:
@@ -652,40 +672,19 @@ def render_craft(query: str = "", error: str | None = None) -> str:
     return _page("Craft", content, "craft")
 
 
-def render_craft_result(
-    query: str,
-    matches: list,
-    items_by_un,
-    recipes_by_result,
-    owned,
-    loc_dict,
-    depth: int = 3,
-) -> str:
+def render_craft_result(query: str, plans: list) -> str:
     """Render search results as expandable crafting trees with summaries."""
     lines = []
     query_norm = query.strip().lower()
-    for m in matches:
-        un = m.get("uniqueName", "")
-        name = resolve_name(m.get("name", ""), loc_dict) or un.split("/")[-1]
-        cat = m.get("category", "")
-        exact = name.lower() == query_norm
-        tree = _tree_html(un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=depth)
-        req, craft = resolve_tree(
-            un,
-            1,
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
-            max_depth=depth,
+    for plan in plans:
+        exact = plan.name.lower() == query_norm
+        tree = _tree_html(plan.tree)
+        lines.append(
+            f"""<details{" open" if exact else ""}>
+<summary style="font-size:1rem">{_esc(plan.name)}
+<span class="dim">({_esc(plan.category)})</span></summary>
+<div class="tree">{tree}</div>{_craft_summary_html(plan.requirements, plan.craftables)}</details>"""
         )
-        add_missing_blueprint_requirement(un, name, req, owned, recipes_by_result)
-        requirements = postprocess_craft_plan(
-            req, craft, owned, items_by_un, recipes_by_result, loc_dict
-        )
-        lines.append(f"""<details{" open" if exact else ""}>
-<summary style="font-size:1rem">{_esc(name)} <span class="dim">({_esc(cat)})</span></summary>
-<div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
 
     content = f"""
 <form method="get" action="/craft" style="margin-bottom:16px">
@@ -706,17 +705,12 @@ def render_craft_result(
 
 
 def render_weapon_chains(
-    chains: list,
+    chain_views: list,
     all_requirements: dict,
     all_craftables: dict,
     shown: int,
-    items_by_un,
-    recipes_by_result,
-    owned,
-    loc_dict,
 ) -> str:
-    """Render the Weapon Chains tab (unowned upgrade chains with crafting trees)."""
-    parts = []
+    """Render the Weapon Chains tab from prepared chain view models."""
     if shown == 0:
         return _page(
             "Weapon Chains",
@@ -725,38 +719,16 @@ def render_weapon_chains(
             "weapon-chains",
         )
 
-    parts.append(f"<p>{shown} chain{'s' if shown != 1 else ''} with unowned final weapons.</p>")
-
-    for chain in chains:
-        final_un = chain[-1]
-        final_norm = normalize_path(final_un)
-        if owned.get(final_norm, 0) > 0:
-            continue
-
-        # Show the whole upgrade path (e.g. "Magnus Prime → Akmagnus Prime"),
-        # matching the CLI; only the final weapon is actually built.
-        names = [weapon_name(un, items_by_un, loc_dict) for un in chain]
-
-        tree = _tree_html(final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=5)
-        req, craft = resolve_tree(
-            final_un,
-            1,
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
-            max_depth=5,
-        )
-        add_missing_blueprint_requirement(final_un, names[-1], req, owned, recipes_by_result)
-        requirements = postprocess_craft_plan(
-            req, craft, owned, items_by_un, recipes_by_result, loc_dict
-        )
-        parts.append(f"""<details>
+    parts = [f"<p>{shown} chain{'s' if shown != 1 else ''} with unowned final weapons.</p>"]
+    for names, plan in chain_views:
+        tree = _tree_html(plan.tree)
+        parts.append(
+            f"""<details>
 <summary>{_esc(" → ".join(names))}</summary>
-<div class="tree">{tree}</div>{_craft_summary_html(requirements, craft)}</details>""")
+<div class="tree">{tree}</div>{_craft_summary_html(plan.requirements, plan.craftables)}</details>"""
+        )
 
     parts.append(_craft_summary_html(all_requirements, all_craftables))
-
     return _page("Weapon Chains", "".join(parts), "weapon-chains")
 
 

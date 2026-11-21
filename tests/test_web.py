@@ -8,7 +8,8 @@ from warframe_profile.model.analysis import (
     NeededPart,
     PartAnalysis,
 )
-from warframe_profile.presenter.mastery import (
+from warframe_profile.model.data import Inventory, ItemData
+from warframe_profile.model.mastery import (
     MasteryReport,
     MasteryRow,
     MasterySection,
@@ -29,6 +30,7 @@ from warframe_profile.view.web.templates import (
     render_home,
     render_mastery_owned_blueprints,
     render_mastery_ready,
+    render_primes,
     render_relics_needed,
     render_relics_safe,
 )
@@ -95,6 +97,18 @@ def test_home_page_has_both_refresh_buttons():
     assert 'action="/refresh-items"' in page
     assert "Refresh Inventory" in page
     assert "Refresh Item DB" in page
+
+
+def test_notifications_are_anchored_to_lower_right():
+    page = render_home()
+
+    assert ".notice { position: fixed; bottom: 16px; right: 16px;" in page
+
+
+def test_notifications_dismiss_automatically_after_a_few_seconds():
+    page = render_home()
+
+    assert "setTimeout(() => notice.remove(), 5000);" in page
 
 
 def _bare_handler(web_server):
@@ -328,6 +342,7 @@ def _needed_part(
     part: str,
     item: str,
     category: str,
+    drops: list[tuple[str, int, str, str]] | None = None,
 ) -> NeededPart:
     return NeededPart(
         part_name=part,
@@ -336,8 +351,174 @@ def _needed_part(
         category=category,
         missing=1,
         ducats=15,
-        drops=[],
+        drops=drops or [],
     )
+
+
+def test_render_primes_lists_missing_parts_and_owned_relic_drops():
+    needed = [
+        _needed_part(
+            "Ash Prime Chassis",
+            "Ash Prime",
+            "Warframes",
+            drops=[("Axi A5", 3, "Axi", "Rare")],
+        ),
+        _needed_part("Orthos Prime Blade", "Orthos Prime", "Melee"),
+    ]
+
+    page = render_primes(needed)
+
+    assert "Missing Prime Parts" in page
+    assert "2 missing Prime parts" in page
+    assert "1 can drop from an owned relic" in page
+    assert "Ash Prime Chassis" in page
+    assert "Axi A5 x3" in page
+    assert "Orthos Prime Blade" in page
+    assert "<h3>Warframes</h3>" in page
+    assert "<h3>Melee</h3>" in page
+    assert 'class="active">Type' in page
+    assert "/primes/age" in page
+    assert "/primes/rarity" in page
+    assert 'class="active">Primes' in page
+
+
+def test_render_primes_escapes_part_and_relic_names():
+    needed = [
+        _needed_part(
+            "<script>Ash Prime Chassis</script>",
+            "<b>Ash Prime</b>",
+            "Warframes",
+            drops=[("<i>Axi A5</i>", 1, "Axi", "Rare")],
+        )
+    ]
+
+    page = render_primes(needed)
+
+    assert "<script>Ash Prime Chassis</script>" not in page
+    assert "&lt;script&gt;Ash Prime Chassis&lt;/script&gt;" in page
+    assert "<b>Ash Prime</b>" not in page
+    assert "&lt;b&gt;Ash Prime&lt;/b&gt;" in page
+    assert "<i>Axi A5</i>" not in page
+    assert "&lt;i&gt;Axi A5&lt;/i&gt;" in page
+
+
+def test_render_primes_groups_by_relic_age_and_filters_drops():
+    needed = [
+        _needed_part(
+            "Ash Prime Chassis",
+            "Ash Prime",
+            "Warframes",
+            drops=[
+                ("Axi A5", 2, "Axi", "Rare"),
+                ("Lith S1", 1, "Lith", "Common"),
+            ],
+        ),
+        _needed_part(
+            "Orthos Prime Blade",
+            "Orthos Prime",
+            "Melee",
+            drops=[("Neo N1", 1, "Neo", "Uncommon")],
+        ),
+        _needed_part("Lato Prime Barrel", "Lato Prime", "Secondary"),
+    ]
+
+    page = render_primes(needed, "age")
+
+    assert 'class="active">Relic Age' in page
+    assert "<th>Type</th>" in page
+    assert "<h3>Meso</h3>" not in page
+    lith = page[page.index("<h3>Lith</h3>") : page.index("<h3>Neo</h3>")]
+    assert "Lith S1 x1" in lith
+    assert "Axi A5" not in lith
+    axi = page[page.index("<h3>Axi</h3>") : page.index("<h3>No owned relic drops</h3>")]
+    assert "Axi A5 x2" in axi
+    assert "Lith S1" not in axi
+    no_relic = page[page.index("<h3>No owned relic drops</h3>") :]
+    assert "Lato Prime Barrel" in no_relic
+
+
+def test_render_primes_groups_by_rarity_and_filters_drops():
+    needed = [
+        _needed_part(
+            "Ash Prime Chassis",
+            "Ash Prime",
+            "Warframes",
+            drops=[
+                ("Axi A5", 2, "Axi", "Rare"),
+                ("Lith S1", 1, "Lith", "Common"),
+            ],
+        ),
+        _needed_part(
+            "Orthos Prime Blade",
+            "Orthos Prime",
+            "Melee",
+            drops=[("Neo N1", 1, "Neo", "Uncommon")],
+        ),
+        _needed_part(
+            "Lato Prime Barrel",
+            "Lato Prime",
+            "Secondary",
+            drops=[("Meso M1", 1, "Meso", "")],
+        ),
+    ]
+
+    page = render_primes(needed, "rarity")
+
+    assert 'class="active">Rarity' in page
+    assert page.index("<h3>Common</h3>") < page.index("<h3>Uncommon</h3>")
+    assert page.index("<h3>Uncommon</h3>") < page.index("<h3>Rare</h3>")
+    assert page.index("<h3>Rare</h3>") < page.index("<h3>Unknown rarity</h3>")
+    common = page[page.index("<h3>Common</h3>") : page.index("<h3>Uncommon</h3>")]
+    assert "Lith S1 x1" in common
+    assert "Axi A5" not in common
+    rare = page[page.index("<h3>Rare</h3>") : page.index("<h3>Unknown rarity</h3>")]
+    assert "Axi A5 x2" in rare
+    assert "Lith S1" not in rare
+    unknown = page[page.index("<h3>Unknown rarity</h3>") :]
+    assert "Lato Prime Barrel" in unknown
+    assert "Meso M1 x1" in unknown
+
+
+def test_render_primes_shows_empty_state():
+    page = render_primes([])
+
+    assert "No Prime parts are missing" in page
+    assert 'class="active">Primes' in page
+
+
+def test_primes_route_accepts_views_and_rejects_subpaths(monkeypatch):
+    from warframe_profile.presenter import web_server
+
+    needed = [_needed_part("Ash Prime Chassis", "Ash Prime", "Warframes")]
+    monkeypatch.setattr(
+        web_server._cache,
+        "inventory",
+        SimpleNamespace(needed_drops=needed),
+    )
+    monkeypatch.setattr(
+        web_server,
+        "render_primes",
+        lambda n, view="type": f"primes-{view}",
+    )
+
+    calls = []
+    handler = _bare_handler(web_server)
+    handler._html = lambda code, page: calls.append((code, page))
+
+    web_server.WarframeHandler._handle_primes(handler, "")
+    web_server.WarframeHandler._handle_primes(handler, "/age")
+    web_server.WarframeHandler._handle_primes(handler, "/rarity")
+    web_server.WarframeHandler._handle_primes(handler, "/type")
+    web_server.WarframeHandler._handle_primes(handler, "/unknown")
+
+    not_found = (404, "<h1>404 Not Found</h1>")
+    assert calls == [
+        (200, "primes-type"),
+        (200, "primes-age"),
+        (200, "primes-rarity"),
+        not_found,
+        not_found,
+    ]
 
 
 def test_relic_category_tabs_put_safe_first_and_order_categories():
@@ -377,9 +558,11 @@ def test_relics_route_defaults_to_safe_and_rejects_unsupported_paths(monkeypatch
     from warframe_profile.presenter import web_server
 
     needed = [_needed_part("Ash Prime Chassis", "Ash Prime", "Warframes")]
-    monkeypatch.setattr(web_server, "_ensure_relics", lambda: None)
-    monkeypatch.setattr(web_server._cache, "needed_drops", needed)
-    monkeypatch.setattr(web_server._cache, "relic_info", [])
+    monkeypatch.setattr(
+        web_server._cache,
+        "inventory",
+        SimpleNamespace(needed_drops=needed, relic_info=[]),
+    )
     monkeypatch.setattr(web_server, "render_relics_safe", lambda n, r: "safe-page")
     monkeypatch.setattr(
         web_server,
@@ -410,8 +593,11 @@ def test_relics_route_defaults_to_safe_and_rejects_unsupported_paths(monkeypatch
 def test_mastery_rejects_legacy_paths(monkeypatch):
     from warframe_profile.presenter import web_server
 
-    monkeypatch.setattr(web_server, "_ensure_mastery", lambda: None)
-    monkeypatch.setattr(web_server._cache, "mastery_report", object())
+    monkeypatch.setattr(
+        web_server._cache,
+        "inventory",
+        SimpleNamespace(mastery_report=object()),
+    )
 
     codes = []
     handler = _bare_handler(web_server)
@@ -490,10 +676,14 @@ def test_render_craft_result_opens_exact_match():
         "name": "Lato Prime",
         "category": "Secondary",
     }
-    items_by_un = {item["uniqueName"].lower(): item}
+    raw = {"items": [item], "recipes": {}, "dict": {}}
+    db = SimpleNamespace(items=[item], recipes={}, locale={}, raw=raw)
+    item_data = ItemData(db)
+    inventory = Inventory({}, item_data)
 
-    exact = render_craft_result("Lato Prime", [item], items_by_un, {}, {}, {})
-    partial = render_craft_result("Lato", [item], items_by_un, {}, {}, {})
+    plan = item_data.craft_plan(item["uniqueName"], inventory)
+    exact = render_craft_result("Lato Prime", [plan])
+    partial = render_craft_result("Lato", [plan])
 
     assert "<details open>" in exact
     assert "<details open>" not in partial

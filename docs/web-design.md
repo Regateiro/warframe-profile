@@ -22,20 +22,33 @@ WarframeHandler (http.server, threaded)
   │  validates POST origin, routes path
   ▼
 DataCache (process singleton)
-  │  db, inventory, owned, mastered
-  │  lazy analysis caches (prime map, ducats, relics, mastery, mods, …)
+  │  ItemData + Inventory
   ▼
-Presenters (model → dataclasses)      View templates (HTML)
-  analysis.py / craft_model.py           templates.py
-  mastery.py / missing_mods.py           (server-side rendering)
+Model (data + logic)                 Presenters (orchestration)   View (passive)
+  ItemData  — items/recipes/locale     cli.py                       report.py
+  Inventory — owned/finished/          craft_tree.py                mastery.py
+              crafting/mastered/       inventory_cleanup.py         mods.py
+              relics/mods/analyses     mastery.py                   web/templates.py
+  mastery.py / mods.py                 missing_mods.py
+  analysis.py / craft_model.py         web_server.py
 ```
 
 Key points:
 
 - The UI is **server-rendered HTML**; there is no client-side framework or API.
+- **`ItemData`** is the only entry point for item, recipe, locale, and index
+  access. **`Inventory`** is the only entry point for player data.
+- “Owned” has one definition: present in the inventory, mastered/finished, or
+  currently in the foundry. `Inventory.is_owned()` is that rule; callers that
+  specifically need a completed copy use `is_finished()`.
+- MVP boundaries are enforced by imports: `view/*` only receives report/view
+  dataclasses and never reads `ItemData`/`Inventory`; presenters load data,
+  call model methods, and delegate rendering; model modules never import the
+  presenter or view layers.
 - The item database and inventory are loaded once at startup into `DataCache`.
-- Expensive analyses are computed **lazily** on first request and cached until
-  the inventory or item database is refreshed.
+- Expensive analyses live on `Inventory` (`analysis`, `needed_drops`,
+  `relic_info`, `mastery_report`, `mods_report`, …) and are computed lazily
+  and cached until the inventory object is replaced.
 - All game-data text is HTML-escaped before interpolation.
 - The server binds to `127.0.0.1` by default and has no authentication.
 
@@ -43,17 +56,19 @@ Key points:
 
 `warframe.py serve` loads:
 
-1. The merged item export (`export_db.json`) and builds static indices:
-   `items_by_un`, `recipes_by_result`, localization dictionary, `by_name`.
+1. The merged item export (`export_db.json`) into `ItemData`, which owns all
+   item/recipe/locale indices (`items_by_un`, `recipes_by_result`, `by_name`,
+   Prime map, …).
 2. The inventory (`inventory.json`, or a live scan when `--refresh` is used)
-   and builds `owned` and the mastered set.
+   into `Inventory`, which owns owned counts, foundry results, finished/
+   mastered state, relics, mods, and the lazy analysis properties.
 
 ### Refresh lifecycle
 
 | Action | What happens |
 |---|---|
-| **Refresh Inventory** (`POST /refresh`) | Re-scans/fetches the inventory, rebuilds `owned`/mastered, drops all lazy analysis caches, redirects back to the current page. Success shows `notice=…`; failure shows `refresh_error=…` and keeps cached data. |
-| **Refresh Item DB** (`POST /refresh-items`) | Runs the `update` download/merge, reloads the database and static indices, rebuilds inventory-derived state, drops lazy caches, redirects back with a notice. A lock prevents concurrent database refreshes. |
+| **Refresh Inventory** (`POST /refresh`) | Re-scans/fetches the inventory and replaces the `Inventory` object, atomically dropping every cached analysis; redirects back to the current page. Success shows `notice=…`; failure shows `refresh_error=…` and keeps cached data. |
+| **Refresh Item DB** (`POST /refresh-items`) | Runs the `update` download/merge, reloads the `ItemData` object, rebuilds `Inventory` against the new item database, and redirects back with a notice. A lock prevents concurrent database refreshes. |
 
 Both POSTs reject cross-origin browser requests via an Origin/Referer check;
 clients that send neither header (e.g. `curl`) are allowed.
@@ -61,8 +76,8 @@ clients that send neither header (e.g. `curl`) are allowed.
 ### Shared page shell
 
 - Dark GitHub-style theme.
-- Top navigation: **Home, Ducats, Relics, Craft, Weapon Chains, Mastery, Mods,
-  Cleanup**, plus the two refresh buttons.
+- Top navigation: **Home, Ducats, Primes, Relics, Craft, Weapon Chains,
+  Mastery, Mods, Cleanup**, plus the two refresh buttons.
 - Pages with multiple views use a horizontal subtab bar.
 - Query-string notifications (`notice`, `refresh_error`) render as a dismissible
   toast and are removed from the URL.
@@ -77,6 +92,9 @@ clients that send neither header (e.g. `curl`) are allowed.
 |---|---|
 | `/` | Home |
 | `/ducats` | Ducats — sell list |
+| `/primes` | Primes — missing parts by **Type** (default) |
+| `/primes/age` | Primes — grouped by Relic Age |
+| `/primes/rarity` | Primes — grouped by drop Rarity |
 | `/relics` | Relics — **Safe to Spam** (default) |
 | `/relics/needed/<category-slug>` | Needed drops for one item type |
 | `/craft?q=…` | Craft search / results |
@@ -140,13 +158,80 @@ Static list of tabs and a one-line description of each. No analysis is loaded.
 
 ---
 
-## 5. Relics
+## 5. Primes
+
+**Default:** Type at `/primes`.  
+**Subtabs:** Type (default) · Relic Age · Rarity.  
+**Data:** `NeededPart` list (`build_needed_drops`).
+
+### Display rules
+
+- Shows every Prime part that is still missing, across all item categories.
+- Every subtab uses the same columns (the Type column is added to the age and
+  rarity tables):
+  - **Part** — WFCD-style reward name (e.g. `Ash Prime Chassis Blueprint`).
+  - **Item** — parent Prime item.
+  - **Type** — parent item category (age/rarity views only).
+  - **Need** — missing copies.
+  - **Duc** — ducats per copy.
+  - **Owned Relic Drops** — owned relics that can drop the part, as
+    `relic name ×count`, or `—` when no owned relic drops it.
+- Within a group, rows are sorted by item name, then part name.
+- The header line reports the **unique** number of missing parts and how many
+  can drop from an owned relic.
+- Empty state: “No Prime parts are missing — you have every part needed for
+  the Prime items in your crafting plans.”
+
+### 5.1 Type (default)
+
+**Path:** `/primes`
+
+- Parts are grouped under `<Category>` headings in the Relics tab order
+  (`Warframes → Primary → Secondary → Melee → Archwing → Sentinels →
+  Arch-Gun`, then unknown categories alphabetically).
+
+### 5.2 Relic Age
+
+**Path:** `/primes/age`
+
+- Parts are grouped under **Lith**, **Meso**, **Neo**, and **Axi** headings,
+  followed by `Unknown age` and a final `No owned relic drops` group.
+- A part is repeated under every owned-relic age that can drop it. Its
+  **Owned Relic Drops** cell is filtered to that age, so the row answers
+  “which of my Lith relics can drop this?” rather than repeating unrelated
+  relics.
+- Parts that no owned relic can drop appear once under
+  `No owned relic drops`.
+
+### 5.3 Rarity
+
+**Path:** `/primes/rarity`
+
+- Parts are grouped under **Common**, **Uncommon**, and **Rare** headings,
+  followed by `Unknown rarity` and `No owned relic drops`.
+- A part is repeated under every drop rarity available from the player's
+  relics; the **Owned Relic Drops** cell is filtered to that rarity.
+- Parts that no owned relic can drop appear once under
+  `No owned relic drops`.
+
+### Logic notes
+
+- This is the same data as the per-category **Relics → Needed Drops** views,
+  presented as one searchable-at-a-glance list.
+- A part only counts as missing when `missing > 0` and it has a ducat value,
+  matching the relic logic (§6.2).
+- Only **owned** relics are listed; the view is a “what can I open now”
+  checklist, not a global relic drop table.
+- Drop rarity comes from the relic reward's `rarity` field
+  (`Common` / `Uncommon` / `Rare`).
+
+## 6. Relics
 
 **Default:** Safe to Spam at `/relics`.  
 **Data:** `RelicInfo` list (`build_relics_map`) and `NeededPart` list
 (`build_needed_drops`).
 
-### 5.1 Safe to Spam (default, first subtab)
+### 6.1 Safe to Spam (default, first subtab)
 
 **Path:** `/relics`
 
@@ -160,6 +245,9 @@ covered:
   - Non-Prime rewards (Forma, Kuva, Riven Sliver, etc.) are ignored.
   - A Prime part is “not needed” when owned copies already cover all required
     builds (`missing == 0`). This accounts for parts consumed by crafting.
+  - Items and components currently in the foundry count as covered: a pending
+    finished item satisfies one build, and a pending component satisfies one
+    copy of that part.
   - Only parts with ducats > 0 participate.
 - If no reward is still needed, the relic is safe.
 
@@ -169,7 +257,7 @@ covered:
 Subtab bar: **Safe to Spam** first, followed by one tab per item category that
 currently has needed parts.
 
-### 5.2 Needed Drops by item type
+### 6.2 Needed Drops by item type
 
 **Paths:** `/relics/needed/<category-slug>`
 
@@ -201,7 +289,7 @@ For each Prime item and each tradable part:
 
 ---
 
-## 6. Craft
+## 7. Craft
 
 **Route:** `/craft?q=<query>`
 
@@ -236,7 +324,7 @@ Mastery rows link to this page with `/craft?q=<item name>`.
 
 ---
 
-## 7. Weapon Chains
+## 8. Weapon Chains
 
 **Route:** `/weapon-chains`  
 **Data:** `build_weapon_chains` (cached lazily).
@@ -264,7 +352,7 @@ Mastery rows link to this page with `/craft?q=<item name>`.
 
 ---
 
-## 8. Mastery
+## 9. Mastery
 
 **Default:** `/mastery` = **Unmastered Owned Items**.  
 **Data:** `MasteryReport` from `build_mastery_report`.  
@@ -278,12 +366,12 @@ Mastery rows link to this page with `/craft?q=<item name>`.
 Every table is driven by the **masterable item universe**, not by the Prime
 index.
 
-### 8.1 Masterable universe
+### 9.1 Masterable universe
 
 - Items with `masterable: true`, plus the special Operator Amp barrel rule.
 - Excludes a small unobtainable set (Excalibur Prime, Lato Prime, Skana Prime).
 
-### 8.2 Per-item classification
+### 9.2 Per-item classification
 
 The report combines XP history, ownership, and the crafting tree.
 
@@ -325,7 +413,7 @@ The readiness plan uses `resolve_tree` (depth 5) +
 `add_missing_blueprint_requirement` + `postprocess_craft_plan`, so it includes
 component blueprints and decomposes intermediate components into materials.
 
-### 8.3 Report sections and ordering
+### 9.3 Report sections and ordering
 
 | Section | Grouping | Sort |
 |---|---|---|
@@ -338,7 +426,7 @@ Every item row has **Item, Category, MR, Source**.
 “MR” is the item’s mastery-point contribution, not the required mastery rank.
 “Source” is the acquisition hint.
 
-### 8.4 Web presentation
+### 9.4 Web presentation
 
 - The subtab bar is shown first; the progression summary sits **below** it.
 - Summary shows: masterable items mastered, unmastered owned, ready to build,
@@ -350,7 +438,7 @@ Every item row has **Item, Category, MR, Source**.
 
 ---
 
-## 9. Mods
+## 10. Mods
 
 **Route:** `/mods`  
 **Data:** `ModsReport` from `build_mods_report`.
@@ -377,11 +465,11 @@ Every item row has **Item, Category, MR, Source**.
 
 ---
 
-## 10. Cleanup
+## 11. Cleanup
 
 **Subtabs:** Re-Buyable (default) · Prime Variant · Excess.
 
-### 10.1 Re-Buyable
+### 11.1 Re-Buyable
 
 **Path:** `/cleanup`
 
@@ -395,7 +483,7 @@ Every item row has **Item, Category, MR, Source**.
 **Columns:** Name, Category, Buy Type, Rarest Material.  
 **Empty state:** “Nothing to clean up!”
 
-### 10.2 Prime Variant
+### 11.2 Prime Variant
 
 **Path:** `/cleanup/sell`
 
@@ -406,7 +494,7 @@ Every item row has **Item, Category, MR, Source**.
 **Columns:** Item, Category, Prime Variant.  
 **Empty state:** “Nothing to clean up!”
 
-### 10.3 Excess
+### 11.3 Excess
 
 **Path:** `/cleanup/excess`
 
@@ -420,17 +508,21 @@ Every item row has **Item, Category, MR, Source**.
 
 ---
 
-## 11. Shared model rules worth validating
+## 12. Shared model rules worth validating
 
 These rules affect more than one tab.
 
 ### Ownership and “finished” items
 
-- `owned` is a count of every inventory item plus pending foundry results.
+- `Inventory.owned` counts every inventory item plus foundry results.
 - Blueprints consumed by a pending recipe are subtracted from the blueprint
   count, preventing the same build from being counted twice.
-- `owned_finished` (used by Prime/relic logic) is equipment sections plus
-  mastered items; it does **not** include pending results.
+- `Inventory.is_owned(path)` is the universal ownership rule: inventory copy,
+  finished/mastered item, **or** foundry result.
+- `Inventory.finished` contains equipment plus mastered items and excludes
+  foundry results. Ducat/surplus logic uses `is_finished`; missing-part and
+  relic logic use `is_owned`, so an item or component being crafted is not
+  reported as missing.
 
 ### Ducats
 
@@ -459,14 +551,17 @@ These rules affect more than one tab.
 
 - Tables are sorted deterministically:
   - Ducats: item name, then part name.
+  - Primes: Type by category order; Relic Age by Lith → Meso → Neo → Axi;
+    Rarity by Common → Uncommon → Rare; item/part within each group. Parts
+    with no owned relic are listed last.
   - Relics: needed rows by item/part; categories by the fixed order above.
-  - Mastery: tier/name or name as listed in §8.3.
+  - Mastery: tier/name or name as listed in §9.3.
   - Mods: category by missing count; mods by name.
   - Cleanup: category/name (re-buyable, prime variant); name (excess).
 
 ---
 
-## 12. Known limitations / design decisions
+## 13. Known limitations / design decisions
 
 Open questions for the reviewer:
 
@@ -492,7 +587,7 @@ Open questions for the reviewer:
 
 ---
 
-## 13. Review checklist
+## 14. Review checklist
 
 - [ ] Every top-level tab and subtab has the expected default and order.
 - [ ] Unsupported/removed paths return 404 (no legacy redirects).
@@ -500,6 +595,10 @@ Open questions for the reviewer:
       page; failure keeps cached data and shows an error toast.
 - [ ] Refresh Item DB reloads indices and clears derived caches.
 - [ ] Ducats lists only surplus parts with ducats and shows the expected total.
+- [ ] Primes defaults to Type, with Relic Age and Rarity subtabs; age/rarity
+      groups are ordered and their drop lists are filtered to the group.
+- [ ] A Prime item (or component) in the foundry is not listed as a missing
+      part, and its relics can become safe to spam.
 - [ ] Safe-to-Spam is first/default, and needed categories match the fixed order.
 - [ ] Warframe/Archwing relic reward names include the `Blueprint` suffix.
 - [ ] Craft exact matches open automatically; other matches stay collapsed.

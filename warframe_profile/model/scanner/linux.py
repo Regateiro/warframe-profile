@@ -6,13 +6,14 @@ Wine/Proton.  The public interface is re-exported by
 """
 
 import os
+from collections.abc import Iterator
 
 from warframe_profile.model.errors import WarframeNotRunningError
 from warframe_profile.model.scanner._common import (
     DEFAULT_MAX_REGION,
     MAX_IMAGE_REGION,
     WARFRAME_PROCESS_NAME,
-    scan_buffer,
+    scan_buffer_all,
 )
 
 
@@ -47,16 +48,16 @@ def find_warframe_pid() -> int:
     )
 
 
-def find_in_memory(
+def iter_in_memory(
     pid: int,
     pattern: str,
     context: int = 256,
     max_per_region: int = DEFAULT_MAX_REGION,
-) -> tuple[int | None, bytes | None]:
-    """Search a process's address space for an ASCII *pattern*.
+) -> Iterator[tuple[int, bytes]]:
+    """Yield every occurrence of an ASCII *pattern* in a process's memory.
 
-    Works by reading ``/proc/<pid>/maps`` to enumerate memory regions,
-    then scanning each readable region in ``/proc/<pid>/mem``.
+    Works like :func:`find_in_memory` but keeps scanning after the first
+    match, so callers can disambiguate stale or unrelated copies of a string.
     Large anonymous (heap) regions are clamped to *max_per_region*;
     file-backed regions are clamped to 8 MiB — this avoids pathological
     scan times while still finding the credential strings.
@@ -64,18 +65,18 @@ def find_in_memory(
     Args:
         pid: Target process ID.
         pattern: ASCII string to locate.
-        context: Number of extra bytes to return around the match.
+        context: Number of extra bytes to return around each match.
         max_per_region: Maximum bytes to scan per memory region.
 
-    Returns:
-        ``(address, surrounding_bytes)`` or ``(None, None)``.
+    Yields:
+        ``(address, surrounding_bytes)`` for every match, in memory order.
     """
     needle = pattern.encode("ascii")
     try:
         with open(f"/proc/{pid}/maps", encoding="utf-8", errors="replace") as f:
             regions: list[list[str]] = [line.split() for line in f]
     except OSError:
-        return (None, None)  # /proc unavailable (no access) → no match
+        return  # /proc unavailable (no access) → no match
 
     for parts in regions:
         perms = parts[1]
@@ -95,9 +96,33 @@ def find_in_memory(
             with open(f"/proc/{pid}/mem", "rb") as mem:
                 mem.seek(start)
                 data = mem.read(chunk_size)
-                match = scan_buffer(data, needle, context, start)
-                if match is not None:
-                    return match
+                yield from scan_buffer_all(data, needle, context, start)
         except (OSError, PermissionError):
             pass
-    return None, None
+
+
+def find_in_memory(
+    pid: int,
+    pattern: str,
+    context: int = 256,
+    max_per_region: int = DEFAULT_MAX_REGION,
+) -> tuple[int | None, bytes | None]:
+    """Search a process's address space for an ASCII *pattern*.
+
+    Returns only the first match.  Use :func:`iter_in_memory` when every
+    occurrence is needed.
+
+    Args:
+        pid: Target process ID.
+        pattern: ASCII string to locate.
+        context: Number of extra bytes to return around the match.
+        max_per_region: Maximum bytes to scan per memory region.
+
+    Returns:
+        ``(address, surrounding_bytes)`` or ``(None, None)``.
+    """
+    matches = iter_in_memory(pid, pattern, context, max_per_region)
+    try:
+        return next(matches, (None, None))
+    finally:
+        matches.close()

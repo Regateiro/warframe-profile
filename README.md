@@ -313,19 +313,24 @@ warframe-profile/
       scanner/                               # Live process scanning backends
         linux.py                             # /proc backend
         windows.py                           # Win32 API backend (ctypes)
-      inventory.py                           # API fetching, cache, shared helpers
+      inventory.py                           # API fetching, cache, raw inventory helpers
+      data.py                                # ItemData + Inventory (central data access)
       analysis.py                            # Prime-map indexing & cross-reference analysis
-      craft_model.py                         # Item/recipe indices for the craft tree
+      craft_model.py                         # Item/recipe indices + craft-tree view models
+      mastery.py                             # Mastery classification/report model
+      mods.py                                # Missing-mod categorization/report model
       ...
-    presenter/                               # CLI + web sub-command entry points
+    presenter/                               # Orchestration only (load → model → view)
       cli.py                                 # ducats / relics
       craft_tree.py                          # craft
       inventory_cleanup.py                   # cleanup
       mastery.py                             # mastery
       missing_mods.py                        # mods
       web_server.py                          # serve
-    view/                                    # Output rendering (tables / HTML)
-      report.py                              # prettytable report formatting
+    view/                                    # Passive rendering (tables / HTML)
+      report.py                              # ducats/relic/craft/cleanup tables
+      mastery.py                             # mastery report tables
+      mods.py                                # missing-mod report tables
       web/templates.py                       # Web UI HTML templates
     scripts/
       update_export_db.py                    # update: download & merge export data

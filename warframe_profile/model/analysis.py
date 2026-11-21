@@ -19,8 +19,7 @@ from collections.abc import Set
 from dataclasses import dataclass, field
 from enum import Enum
 
-from warframe_profile.model.craft_model import resolve_name
-from warframe_profile.model.inventory import ExportDB, build_owned, parse_pending_recipes
+from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.model.utils import normalize_path
 
 
@@ -216,100 +215,52 @@ class AnalysisResult:
     total_ducats_keep: int = 0
     sellable: list[SellableEquipment] | None = None
 
+    def surplus_parts(self) -> dict[tuple[str, str], dict[str, int]]:
+        """Aggregate surplus ducat-valued parts by ``(item name, part name)``."""
+        sell: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: {"count": 0, "ducats": 0})
+        for item in self.items:
+            for part in item.parts:
+                if part.surplus > 0 and part.ducats > 0:
+                    key = (item.name, part.name)
+                    sell[key]["count"] += part.surplus
+                    sell[key]["ducats"] = part.ducats
+        return dict(sell)
+
 
 # ---------------------------------------------------------------------------
 # Shared analysis helpers
 # ---------------------------------------------------------------------------
-# These internal functions are used by both the main ``analyze()`` function
-# and the relic / excess analysis functions.  They compute:
-#   - owned_finished: set of items the player has built (equipment + mastered)
-#   - extra_builds: how many extra copies of a Prime item are needed because
-#     it is used as a crafting ingredient in another Prime item
-#   - needed_builds: total builds required = (0 if owned else 1) + extras
+# ``_compute_needed_builds`` combines the universal ownership rule from
+# ``Inventory`` with the inventory's sub-craft dependency shortfalls:
+#   needed_builds = (0 if owned/crafting else 1) + extra_builds
 
 
-def compute_owned_finished(
-    inventory: dict,
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
-) -> set[str]:
-    """Build a set of normalised paths for finished items the player owns.
+def _compute_needed_builds(item_un: str, inventory: Inventory) -> int:
+    """Return the total number of builds still needed for a Prime item.
 
-    Includes every equipment entry in the inventory sections, plus any
-    mastered items (items ranked up even if later sold).
-
-    This is the "what do I have?" baseline for the entire analysis.
+    One copy when the player neither owns nor is crafting it, plus any extra
+    copies required for sub-craft dependencies.  Ownership uses the universal
+    :meth:`Inventory.is_owned` rule (inventory **or** foundry).
     """
-    result: set[str] = {
-        normalize_path(eq.get("ItemType", ""))
-        for sect in equipment_sections
-        for eq in inventory.get(sect, [])
-    }
-    if mastered:
-        result |= mastered
-    return result
+    needed = 0 if inventory.is_owned(item_un) else 1
+    return needed + inventory.extra_builds.get(item_un, 0)
 
 
-def compute_extra_builds(
-    prime_map: dict[str, dict],
-    owned: dict[str, int],
-    owned_finished: set[str],
-) -> dict[str, int]:
-    """Determine how many extra builds are needed for sub-craft dependencies.
-
-    When a Prime item is itself a component of another Prime (e.g. a weapon
-    used as material for a dual-wield variant), the player may need multiple
-    copies: one to keep and extras to consume in sub-crafts.
-
-    Example: if Boltor Prime is needed as an ingredient in Akboltor Prime,
-    and the player already owns one Boltor Prime but needs two for crafting,
-    then extra_builds["BoltorPrime"] = 1.
-    """
-    buildable_keys = {
-        un for un, info in prime_map.items() if info["parts"] and not info["is_cosmetic"]
-    }
-    component_need: dict[str, int] = defaultdict(int)
-    for un, info in prime_map.items():
+def _iter_required_parts(item_data: ItemData, inventory: Inventory):
+    """Yield ``(info, part, needed_builds, owned_qty)`` for ducat-valued parts."""
+    for un, info in item_data.prime_map.items():
         if info["is_cosmetic"]:
             continue
-        # Don't count sub-craft dependencies for items the player already owns.
-        if normalize_path(un) in owned_finished:
-            continue
-        # Use all components (tradable + non-tradable): weapons consumed as
-        # akimbo ingredients (e.g. Magnus Prime in Akmagnus Prime) are
-        # non-tradable, so they are absent from ``parts``.
-        for part in info.get("all_parts", info["parts"]):
-            if part["uniqueName"] in buildable_keys:
-                component_need[part["uniqueName"]] += part["count"]
-
-    extra_builds: dict[str, int] = {}
-    for dep_un, total_needed in component_need.items():
-        dep_norm = normalize_path(dep_un)
-        # Owned copies count toward the sub-craft need: a Magnus Prime you own
-        # can be consumed to build Akmagnus Prime, so only the shortfall is
-        # built. (e.g. need 2, own 1 -> build 1 more.)
-        available = owned.get(dep_norm, 0)
-        extra = max(0, total_needed - available)
-        if extra > 0:
-            extra_builds[dep_un] = extra
-    return extra_builds
-
-
-def _compute_needed_builds(
-    item_un: str,
-    owned_finished: set[str],
-    extra_builds: dict[str, int],
-) -> int:
-    """Return the total number of builds needed for a Prime item.
-
-    One copy if not yet owned, plus any extra copies required for sub-craft
-    dependencies.
-
-    Returns 0 if the player already owns the item and no extra copies are
-    needed for sub-crafts.
-    """
-    owned = normalize_path(item_un) in owned_finished
-    return (0 if owned else 1) + extra_builds.get(item_un, 0)
+        needed_builds = _compute_needed_builds(un, inventory)
+        for part in info["parts"]:
+            if part["ducats"] == 0:
+                continue
+            owned_qty = inventory.count(part["uniqueName"])
+            if part["uniqueName"] in item_data.prime_map and inventory.is_finished(
+                part["uniqueName"]
+            ):
+                owned_qty = max(0, owned_qty - 1)
+            yield info, part, needed_builds, owned_qty
 
 
 # ---------------------------------------------------------------------------
@@ -424,87 +375,22 @@ def _shorten_name(full_name: str) -> str:
     return full_name
 
 
-def _build_owned_relics(inventory: dict) -> dict[str, int]:
-    """Return a ``{relic_uniqueName: count}`` map for relics the player owns.
-
-    Only Intact refinement relics are counted (the DE inventory always
-    stores the Intact variant uniqueName).
-    """
-    owned: dict[str, int] = {}
-    for item in inventory.get("MiscItems", []):
-        un = item.get("ItemType", "")
-        count = item.get("ItemCount", 1)
-        if not un:
-            continue
-        # Quick check: relic paths contain "Projections"
-        if "/Projections/T" not in un:
-            continue
-        # Skip the VoidProjectionFeatureItem
-        if "VoidProjectionFeatureItem" in un:
-            continue
-        # Skip Requiem relics and generic placeholder entries
-        if "Immortal" in un:
-            continue
-        owned[un] = owned.get(un, 0) + count
-    return owned
-
-
 def _build_not_needed_part_names(
-    prime_map: dict[str, dict],
-    inventory: dict,
-    owned: dict[str, int],
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
-    owned_finished: set[str] | None = None,
-    extra_builds: dict[str, int] | None = None,
+    item_data: ItemData,
+    inventory: Inventory,
 ) -> set[str]:
-    """Build a set of reward-style names for parts the player does NOT need.
+    """Build reward-style names for parts the player does NOT need.
 
-    A part is considered "not needed" when the player already has enough
-    copies for all required builds (missing == 0).  This correctly handles
-    the common case where parts were consumed to craft an item — the player
-    may own zero copies but still doesn't need any more.
-
-    Only parts with a ducat value > 0 are considered — parts with 0 ducats
-    are either crafting materials (e.g. Orokin Cell), base weapons used as
-    akimbo ingredients, or non-Prime items misclassified as Prime.
+    A part is "not needed" when the player's universal owned count — inventory
+    copies, finished/mastered items, or foundry results — covers every
+    required build.  Only parts with a ducat value > 0 participate.
     """
-    owned_finished = (
-        owned_finished
-        if owned_finished is not None
-        else compute_owned_finished(inventory, equipment_sections, mastered)
-    )
-    extra_builds = (
-        extra_builds
-        if extra_builds is not None
-        else compute_extra_builds(prime_map, owned, owned_finished)
-    )
-
     not_needed: set[str] = set()
-
-    for un, info in prime_map.items():
-        if info["is_cosmetic"]:
+    for info, part, needed_builds, owned_qty in _iter_required_parts(item_data, inventory):
+        if owned_qty < part["count"] * needed_builds:
             continue
-
-        item_name = info["name"]
-        cat = info["category"]
-        needed_builds = _compute_needed_builds(un, owned_finished, extra_builds)
-
-        for p in info["parts"]:
-            if p["ducats"] == 0:
-                continue
-
-            pn = normalize_path(p["uniqueName"])
-            owned_qty = owned.get(pn, 0)
-
-            if p["uniqueName"] in prime_map and pn in owned_finished:
-                owned_qty = max(0, owned_qty - 1)
-
-            if owned_qty >= p["count"] * needed_builds:
-                names = _reward_names_for_part(item_name, p["name"], cat)
-                for n in names:
-                    not_needed.add(n)
-
+        for name in _reward_names_for_part(info["name"], part["name"], info["category"]):
+            not_needed.add(name)
     return not_needed
 
 
@@ -561,32 +447,14 @@ def _process_relic_rewards(
     return False
 
 
-def build_relics_map(
-    items: list[dict],
-    inventory: dict,
-    prime_map: dict[str, dict],
-    owned: dict[str, int],
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
-    owned_finished: set[str] | None = None,
-    extra_builds: dict[str, int] | None = None,
-) -> list[RelicInfo]:
+def build_relics_map(item_data: ItemData, inventory: Inventory) -> list[RelicInfo]:
     """Cross-reference owned relics against needed prime parts."""
-    all_relics = [i for i in items if i.get("category") == "Relics"]
-    relic_by_un: dict[str, dict] = {r["uniqueName"]: r for r in all_relics}
-    owned_relics = _build_owned_relics(inventory)
-    not_needed = _build_not_needed_part_names(
-        prime_map,
-        inventory,
-        owned,
-        equipment_sections,
-        mastered=mastered,
-        owned_finished=owned_finished,
-        extra_builds=extra_builds,
-    )
+    all_relics = [item for item in item_data.items if item.get("category") == "Relics"]
+    relic_by_un: dict[str, dict] = {relic["uniqueName"]: relic for relic in all_relics}
+    not_needed = _build_not_needed_part_names(item_data, inventory)
 
     results: list[RelicInfo] = []
-    for relic_un, relic_count in sorted(owned_relics.items()):
+    for relic_un, relic_count in sorted(inventory.owned_relics.items()):
         relic = relic_by_un.get(relic_un)
         if not relic:
             continue
@@ -626,7 +494,8 @@ class NeededPart:
         category:   Parent item category (e.g. "Warframes", "Primary").
         missing:    How many more copies are needed.
         ducats:     Ducat value of a single copy.
-        drops:      List of ``(relic_short_name, relic_count, tier)`` tuples.
+        drops:      List of ``(relic_short_name, relic_count, tier, rarity)``
+                    tuples.
     """
 
     part_name: str
@@ -635,17 +504,17 @@ class NeededPart:
     category: str
     missing: int
     ducats: int
-    drops: list[tuple[str, int, str]]
+    drops: list[tuple[str, int, str, str]]
 
 
 def _build_reward_index(
-    inventory: dict,
+    inventory: Inventory,
     all_relics: list[dict],
-) -> dict[str, list[tuple[str, int, str]]]:
-    """Build mapping: reward_name -> [(relic_short_name, count, tier)]."""
-    owned_relics = _build_owned_relics(inventory)
+) -> dict[str, list[tuple[str, int, str, str]]]:
+    """Build mapping: reward_name -> [(relic_short_name, count, tier, rarity)]."""
+    owned_relics = inventory.owned_relics
     relic_by_un: dict[str, dict] = {r["uniqueName"]: r for r in all_relics}
-    index: dict[str, list[tuple[str, int, str]]] = defaultdict(list)
+    index: dict[str, list[tuple[str, int, str, str]]] = defaultdict(list)
     for relic_un, relic_count in owned_relics.items():
         relic = relic_by_un.get(relic_un)
         if not relic:
@@ -653,94 +522,54 @@ def _build_reward_index(
         short_name = _shorten_name(relic.get("name", ""))
         tier = _tier_from_un(relic_un)
         for rw in relic.get("rewards", []):
-            index[rw["item"]["name"]].append((short_name, relic_count, tier))
+            rarity = rw.get("rarity") or ""
+            index[rw["item"]["name"]].append((short_name, relic_count, tier, rarity))
     return index
 
 
 def _process_needed_part(
-    p: dict,
-    item_name: str,
-    cat: str,
+    part: dict,
+    info: dict,
     needed_builds: int,
-    prime_map: dict,
-    owned: dict,
-    owned_finished: set,
+    owned_qty: int,
     reward_index: dict,
 ) -> NeededPart | None:
     """Build a NeededPart if this part is missing."""
-    if p["ducats"] == 0:
-        return None
-    pn = normalize_path(p["uniqueName"])
-    owned_qty = owned.get(pn, 0)
-    if p["uniqueName"] in prime_map and pn in owned_finished:
-        owned_qty = max(0, owned_qty - 1)
-    missing = max(0, p["count"] * needed_builds - owned_qty)
+    missing = max(0, part["count"] * needed_builds - owned_qty)
     if missing == 0:
         return None
-    pnames = _reward_names_for_part(item_name, p["name"], cat)
+    pnames = _reward_names_for_part(info["name"], part["name"], info["category"])
     part_drops = []
-    for pn_ in pnames:
-        for drop in reward_index.get(pn_, []):
+    for pname in pnames:
+        for drop in reward_index.get(pname, []):
             if drop not in part_drops:
                 part_drops.append(drop)
     primary_name = pnames[0]
-    for pn_ in pnames:
-        if pn_ in reward_index:
-            primary_name = pn_
+    for pname in pnames:
+        if pname in reward_index:
+            primary_name = pname
             break
     return NeededPart(
         part_name=primary_name,
-        item_name=item_name,
-        part_type=p["name"],
-        category=cat,
+        item_name=info["name"],
+        part_type=part["name"],
+        category=info["category"],
         missing=missing,
-        ducats=p["ducats"],
+        ducats=part["ducats"],
         drops=part_drops,
     )
 
 
-def build_needed_drops(
-    items: list[dict],
-    inventory: dict,
-    prime_map: dict[str, dict],
-    owned: dict[str, int],
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
-    owned_finished: set[str] | None = None,
-    extra_builds: dict[str, int] | None = None,
-) -> list[NeededPart]:
+def build_needed_drops(item_data: ItemData, inventory: Inventory) -> list[NeededPart]:
     """Identify needed prime parts and which owned relics can drop them."""
-    owned_finished = (
-        owned_finished
-        if owned_finished is not None
-        else compute_owned_finished(inventory, equipment_sections, mastered)
-    )
-    extra_builds = (
-        extra_builds
-        if extra_builds is not None
-        else compute_extra_builds(prime_map, owned, owned_finished)
-    )
-    all_relics = [i for i in items if i.get("category") == "Relics"]
+    all_relics = [item for item in item_data.items if item.get("category") == "Relics"]
     reward_index = _build_reward_index(inventory, all_relics)
 
     result: list[NeededPart] = []
-    for un, info in prime_map.items():
-        if info["is_cosmetic"]:
-            continue
-        needed_builds = _compute_needed_builds(un, owned_finished, extra_builds)
-        for p in info["parts"]:
-            np = _process_needed_part(
-                p,
-                info["name"],
-                info["category"],
-                needed_builds,
-                prime_map,
-                owned,
-                owned_finished,
-                reward_index,
-            )
-            if np:
-                result.append(np)
+    for info, part, needed_builds, owned_qty in _iter_required_parts(item_data, inventory):
+        needed = _process_needed_part(part, info, needed_builds, owned_qty, reward_index)
+        if needed:
+            result.append(needed)
 
     result.sort(key=lambda x: (x.item_name, x.part_type))
     return result
@@ -800,73 +629,52 @@ def build_ingredient_to_results(recipes: dict) -> dict[str, set[str]]:
 
 
 def build_ingredient_index_craftable_to_owned(
-    recipes: dict,
-    items: list[dict],
-    inventory: dict,
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
+    item_data: ItemData,
+    inventory: Inventory,
 ) -> set[str]:
     """Build a set of item uniqueNames that should *not* be sold.
 
-    Unlike :func:`build_ingredient_index`, this function only excludes
-    ingredients that are needed to craft items the player doesn't fully
-    own yet.  Ingredients that only craft into already-owned items are
-    considered safe to sell.
-
-    Two cases are covered (mirroring :func:`build_ingredient_index`):
-
-    1. Items used as ingredients where at least one recipe result is
-       **not** already owned or mastered.
-    2. Items whose own recipe requires a weapon as an ingredient **and**
-       the result is not already owned or mastered.
+    Only ingredients needed for items the player does not already own (or is
+    not currently crafting) are excluded.  Ingredients whose every crafting
+    path leads to an owned/mastered/foundry item are safe to sell.
     """
-    owned_finished: set[str] = {
-        normalize_path(eq.get("ItemType", ""))
-        for sect in equipment_sections
-        for eq in inventory.get(sect, [])
-    }
-    if mastered:
-        owned_finished |= mastered
-
     weapon_uns: set[str] = {
         item["uniqueName"]
-        for item in items
+        for item in item_data.items
         if item.get("uniqueName") and item.get("category") in WEAPON_CATEGORIES
     }
 
-    # Build reverse indices: resultType → recipe_data and
-    # ingredient → set of resultTypes.
     result_to_recipe: dict[str, dict] = {}
-    for recipe_data in recipes.values():
+    for recipe_data in item_data.recipes.values():
         result_type = recipe_data.get("resultType", "")
         if result_type:
             result_to_recipe[result_type] = recipe_data
 
-    ingredient_to_results = build_ingredient_to_results(recipes)
+    ingredient_to_results = item_data.ingredient_to_results
 
     exclude: set[str] = set()
 
     # Case 1: ingredients that craft into at least one unowned item.
-    for recipe_data in recipes.values():
+    for recipe_data in item_data.recipes.values():
         for ingredient in recipe_data.get("ingredients", []):
             item_type = ingredient.get("ItemType", "")
             if not item_type:
                 continue
 
             results = ingredient_to_results.get(item_type, set())
-            # If ingredient has no known results or any result is not owned,
-            # keep it excluded — it's still needed.
-            if not results or not all(normalize_path(r) in owned_finished for r in results):
+            # If the ingredient has no known results or any result is not
+            # owned/crafting, keep it — it is still needed.
+            if not results or not all(inventory.is_owned(result) for result in results):
                 exclude.add(item_type)
 
-    # Case 2: items whose recipe requires a weapon as ingredient and
-    # the result is not already owned.
-    for rt, recipe_data in result_to_recipe.items():
-        if normalize_path(rt) in owned_finished:
+    # Case 2: items whose recipe requires a weapon as an ingredient and the
+    # result is not already owned or being crafted.
+    for result_type, recipe_data in result_to_recipe.items():
+        if inventory.is_owned(result_type):
             continue
         for ingredient in recipe_data.get("ingredients", []):
             if ingredient.get("ItemType", "") in weapon_uns:
-                exclude.add(rt)
+                exclude.add(result_type)
                 break
 
     return exclude
@@ -874,20 +682,12 @@ def build_ingredient_index_craftable_to_owned(
 
 def _all_crafting_paths_lead_to_owned(
     item_un: str,
-    owned_finished: set[str],
+    inventory: Inventory,
     ingredient_to_results: dict[str, set[str]],
     visited: set[str],
-    mastered: set[str] | None = None,
 ) -> bool:
-    """Return ``True`` if every item this *item_un* can craft into is already owned
-    (or mastered, when *mastered* is provided).
-
-    Recursively follows the recipe chain (component → sub-assembly → finished
-    item).  If *any* path leads to an unowned and unmastered item, returns
-    ``False``.
-    """
-    norm = normalize_path(item_un)
-    if norm in owned_finished or (mastered and norm in mastered):
+    """Return whether every item *item_un* crafts into is already covered."""
+    if inventory.is_owned(item_un):
         return True
 
     if item_un in visited:
@@ -896,17 +696,11 @@ def _all_crafting_paths_lead_to_owned(
 
     results = ingredient_to_results.get(item_un, set())
     if not results:
-        return norm in owned_finished
+        return inventory.is_owned(item_un)
 
     return all(
-        _all_crafting_paths_lead_to_owned(
-            r,
-            owned_finished,
-            ingredient_to_results,
-            visited,
-            mastered=mastered,
-        )
-        for r in results
+        _all_crafting_paths_lead_to_owned(result, inventory, ingredient_to_results, visited)
+        for result in results
     )
 
 
@@ -914,99 +708,67 @@ def _excess_item(
     item_un: str,
     count: int,
     item_type: str,
-    items_by_un: dict,
-    owned_finished: set,
-    loc_dict: dict,
+    item_data: ItemData,
+    inventory: Inventory,
     ingredient_to_results: dict,
-    mastered: set | None,
 ) -> ExcessItem | None:
-    """Return an ExcessItem if *item_un* only crafts into owned items."""
+    """Return an ExcessItem if *item_un* only crafts into covered items."""
     if count == 0:
         return None
-    if not _all_crafting_paths_lead_to_owned(
-        item_un, owned_finished, ingredient_to_results, set(), mastered=mastered
-    ):
+    if not _all_crafting_paths_lead_to_owned(item_un, inventory, ingredient_to_results, set()):
         return None
-    item_data = items_by_un.get(normalize_path(item_un))
-    name = (
-        resolve_name(item_data.get("name", ""), loc_dict) if item_data else item_un.split("/")[-1]
-    )
+    item = item_data.item(item_un)
+    name = item_data.name(item.get("name", "")) if item else item_un.split("/")[-1]
     results = ingredient_to_results.get(item_un, set())
-    builds = (
-        ", ".join(_item_display_name(r, items_by_un, loc_dict) for r in results) if results else "?"
-    )
+    builds = ", ".join(item_data.item_name(result) for result in results) if results else "?"
     return ExcessItem(name=name, item_type=item_type, owned=count, sell=count, builds=builds)
 
 
 def find_excess_blueprints_and_components(
-    inventory: dict,
-    items_by_un: dict[str, dict],
-    recipes: dict,
-    owned_finished: set[str],
-    loc_dict: dict,
-    mastered: set[str] | None = None,
+    item_data: ItemData,
+    inventory: Inventory,
 ) -> list[ExcessItem]:
     """Identify blueprints and components the player can safely sell.
 
     A blueprint or component is *excess* when every finished item it can
-    ultimately be used to craft is already owned or mastered by the player.
-
-    Returns:
-        A list of :class:`ExcessItem` sorted by name.
+    ultimately be used to craft is already owned, mastered, or being crafted.
     """
-
-    ingredient_to_results: dict[str, set[str]] = build_ingredient_to_results(recipes)
+    ingredient_to_results = item_data.ingredient_to_results
 
     excess: list[ExcessItem] = []
 
-    for bp in inventory.get("Recipes", []):
-        bp_un = bp.get("ItemType", "")
-        if bp_un:
-            item = _excess_item(
-                bp_un,
-                bp.get("ItemCount", 1),
-                "Blueprint",
-                items_by_un,
-                owned_finished,
-                loc_dict,
-                ingredient_to_results,
-                mastered,
-            )
-            if item:
-                excess.append(item)
+    for blueprint in inventory.blueprints:
+        bp_un = blueprint.get("ItemType", "")
+        if not bp_un:
+            continue
+        item = _excess_item(
+            bp_un,
+            blueprint.get("ItemCount", 1),
+            "Blueprint",
+            item_data,
+            inventory,
+            ingredient_to_results,
+        )
+        if item:
+            excess.append(item)
 
-    for item in inventory.get("MiscItems", []):
-        item_un = item.get("ItemType", "")
-        if item_un and ingredient_to_results.get(item_un):
-            ex = _excess_item(
-                item_un,
-                item.get("ItemCount", 1),
-                "Component",
-                items_by_un,
-                owned_finished,
-                loc_dict,
-                ingredient_to_results,
-                mastered,
-            )
-            if ex:
-                excess.append(ex)
+    for entry in inventory.components:
+        item_un = entry.get("ItemType", "")
+        if not item_un or not ingredient_to_results.get(item_un):
+            continue
+        item = _excess_item(
+            item_un,
+            entry.get("ItemCount", 1),
+            "Component",
+            item_data,
+            inventory,
+            ingredient_to_results,
+        )
+        if item:
+            excess.append(item)
 
     excess.sort(key=lambda x: (x.item_type, x.name))
     return excess
-
-
-def _item_display_name(
-    item_un: str,
-    items_by_un: dict[str, dict],
-    loc_dict: dict,
-) -> str:
-    """Return the human-readable name for an item uniqueName."""
-    item = items_by_un.get(normalize_path(item_un))
-    if item:
-        name = resolve_name(item.get("name", ""), loc_dict)
-        if name:
-            return name
-    return item_un.split("/")[-1]
 
 
 def build_market_credit_map(items: list[dict]) -> dict[str, dict]:
@@ -1039,47 +801,35 @@ def build_market_credit_map(items: list[dict]) -> dict[str, dict]:
 
 
 def find_sellable_equipment(
-    inventory: dict,
+    inventory: Inventory,
     market_map: dict[str, dict],
-    equipment_sections: list[str],
     exclude_ingredients: Set[str] = frozenset(),
 ) -> list[SellableEquipment]:
     """Find owned equipment that can be safely sold (re-buyable for credits).
 
-    Items whose ``uniqueName`` appears in *exclude_ingredients* are
-    kept because they are needed for other crafts.
+    Items whose ``uniqueName`` appears in *exclude_ingredients* are kept
+    because they are needed for other crafts.
     """
     owned: list[SellableEquipment] = []
     seen: set[str] = set()
-    for sect in equipment_sections:
-        for eq in inventory.get(sect, []):
-            un = eq.get("ItemType", "")
-            npath = normalize_path(un)
-            if npath in seen:
-                continue
-            seen.add(npath)
-            if un in market_map and un not in exclude_ingredients:
-                info = market_map[un]
-                owned.append(
-                    SellableEquipment(
-                        name=info["name"],
-                        category=info["category"],
-                        buy_type=info["buy_type"],
-                        rare_component=info.get("rare_component"),
-                    )
+    for equipment in inventory.equipment_entries():
+        un = equipment.get("ItemType", "")
+        npath = normalize_path(un)
+        if npath in seen:
+            continue
+        seen.add(npath)
+        if un in market_map and un not in exclude_ingredients:
+            info = market_map[un]
+            owned.append(
+                SellableEquipment(
+                    name=info["name"],
+                    category=info["category"],
+                    buy_type=info["buy_type"],
+                    rare_component=info.get("rare_component"),
                 )
+            )
     owned.sort(key=lambda x: (x.category, x.name))
     return owned
-
-
-def build_item_index(items: list[dict]) -> dict[str, dict]:
-    """Build a ``uniqueName → item`` lookup from the item list."""
-    by_un: dict[str, dict] = {}
-    for item in items:
-        un = item.get("uniqueName", "")
-        if un:
-            by_un[normalize_path(un)] = item
-    return by_un
 
 
 def build_regular_to_prime_map(items: list[dict]) -> dict[str, dict]:
@@ -1138,64 +888,13 @@ def build_regular_to_prime_map(items: list[dict]) -> dict[str, dict]:
     return reg_to_prime
 
 
-def find_owned_item_uns(
-    inventory: dict,
-    items_by_un: dict[str, dict],
-    equipment_sections: list[str],
-) -> set[str]:
-    """Return uniqueNames of non-Prime equipment owned in inventory."""
-    owned: set[str] = set()
-    for sect in equipment_sections:
-        for eq in inventory.get(sect, []):
-            un = eq.get("ItemType", "")
-            item = items_by_un.get(normalize_path(un))
-            if item and not item.get("isPrime"):
-                owned.add(un)
-    return owned
-
-
-def find_owned_prime_uns(
-    inventory: dict,
-    prime_map: dict[str, dict],
-    equipment_sections: list[str],
-) -> set[str]:
-    """Return uniqueNames of Prime equipment (or blueprints) owned."""
-    owned: set[str] = set()
-    for sect in equipment_sections:
-        for eq in inventory.get(sect, []):
-            un = eq.get("ItemType", "")
-            if un in prime_map:
-                owned.add(un)
-    for bp in inventory.get("Recipes", []):
-        un = bp.get("ItemType", "")
-        if un in prime_map:
-            owned.add(un)
-    return owned
-
-
 def compute_sellable_equipment(
-    db: "ExportDB",
-    inventory: dict,
-    equipment_sections: list[str],
+    item_data: ItemData, inventory: Inventory
 ) -> list[SellableEquipment]:
-    """Compute the market-re-buyable equipment list from an :class:`ExportDB`.
-
-    Convenience wrapper shared by the ``ducats`` / ``relics`` /
-    ``cleanup`` entry points.
-    """
-    ingredient_index = build_ingredient_index_craftable_to_owned(
-        db.recipes,
-        db.items,
-        inventory,
-        equipment_sections,
-    )
-    market_map = build_market_credit_map(db.items)
-    return find_sellable_equipment(
-        inventory,
-        market_map,
-        equipment_sections,
-        ingredient_index,
-    )
+    """Compute the market-re-buyable equipment list for an inventory snapshot."""
+    ingredient_index = build_ingredient_index_craftable_to_owned(item_data, inventory)
+    market_map = build_market_credit_map(item_data.items)
+    return find_sellable_equipment(inventory, market_map, ingredient_index)
 
 
 def build_prime_map(items: list[dict]) -> dict[str, dict]:
@@ -1244,7 +943,7 @@ def build_prime_map(items: list[dict]) -> dict[str, dict]:
         # only tradable parts (for ducat / surplus analysis); ``all_parts``
         # holds every component so sub-craft dependencies on buildable
         # weapons (e.g. Magnus Prime inside Akmagnus Prime) are visible to
-        # compute_extra_builds — those weapons are non-tradable.
+        # sub-craft dependency logic — those weapons are non-tradable.
         comps = item.get("components", [])
         parts_by_un: dict[str, dict] = {}
         all_by_un: dict[str, dict] = {}
@@ -1328,18 +1027,16 @@ def _analyze_parts(
     info: dict,
     prime_map: dict,
     needed_builds: int,
-    owned: dict,
-    owned_finished: set,
+    inventory: Inventory,
     comp_to_bp: dict[str, tuple[str, int]] | None = None,
 ) -> tuple[list[PartAnalysis], int]:
     """Analyse parts for a prime item; return ``(part_analyses, missing_count)``."""
     part_analysis: list[PartAnalysis] = []
     missing_parts = 0
     for part in info["parts"]:
-        pn = normalize_path(part["uniqueName"])
-        owned_qty = owned.get(pn, 0)
+        owned_qty = inventory.count(part["uniqueName"])
 
-        if part["uniqueName"] in prime_map and pn in owned_finished:
+        if part["uniqueName"] in prime_map and inventory.is_finished(part["uniqueName"]):
             owned_qty = max(0, owned_qty - 1)
 
         total_keep = part["count"] * needed_builds
@@ -1366,7 +1063,7 @@ def _analyze_parts(
             bp_info = comp_to_bp.get(part["uniqueName"])
             if bp_info:
                 bp_un, bp_ducats = bp_info
-                bp_owned = owned.get(normalize_path(bp_un), 0)
+                bp_owned = inventory.count(bp_un)
                 if bp_owned > 0:
                     bp_surplus = max(0, bp_owned - missing)
                     if bp_surplus > 0:
@@ -1388,7 +1085,7 @@ def _can_build_copies(
     un: str,
     copies: int,
     prime_map: dict,
-    owned: dict,
+    inventory: Inventory,
     depth: int = 0,
 ) -> bool:
     """Whether *copies* more of a Prime item can be built from owned parts.
@@ -1404,7 +1101,7 @@ def _can_build_copies(
 
     for part in info.get("all_parts") or info["parts"]:
         need = part["count"] * copies
-        have = owned.get(normalize_path(part["uniqueName"]), 0)
+        have = inventory.count(part["uniqueName"])
         if have >= need:
             continue
         gap = need - have
@@ -1413,7 +1110,7 @@ def _can_build_copies(
             depth < 2
             and dep
             and dep["parts"]
-            and _can_build_copies(part["uniqueName"], gap, prime_map, owned, depth + 1)
+            and _can_build_copies(part["uniqueName"], gap, prime_map, inventory, depth + 1)
         ):
             continue
         return False
@@ -1424,7 +1121,7 @@ def _analyze_subcraft_parts(
     info: dict,
     prime_map: dict,
     needed_builds: int,
-    owned: dict,
+    inventory: Inventory,
 ) -> tuple[list[PartAnalysis], int]:
     """Find Prime ingredients that are missing and cannot be crafted.
 
@@ -1447,11 +1144,11 @@ def _analyze_subcraft_parts(
             continue
 
         required = part["count"] * needed_builds
-        owned_qty = owned.get(normalize_path(dep_un), 0)
+        owned_qty = inventory.count(dep_un)
         if owned_qty >= required:
             continue
         deficit = required - owned_qty
-        if _can_build_copies(dep_un, deficit, prime_map, owned):
+        if _can_build_copies(dep_un, deficit, prime_map, inventory):
             continue
 
         analysis.append(
@@ -1499,25 +1196,21 @@ def _make_item_result(
 def _classify_prime_item(
     un: str,
     info: dict,
-    owned: dict,
-    owned_finished: set,
-    extra_builds: dict,
-    prime_map: dict,
+    item_data: ItemData,
+    inventory: Inventory,
     comp_to_bp: dict[str, tuple[str, int]] | None = None,
-    pending: set[str] | None = None,
 ) -> tuple[ItemResult | None, MissingPrime | None]:
     """Analyse one prime item and return ``(item_result, missing_prime)``."""
-    norm = normalize_path(un)
     name = info["name"]
     cat = info["category"]
 
-    has_copy = norm in owned_finished
-    needed_builds = (0 if has_copy else 1) + extra_builds.get(un, 0)
-    extra = extra_builds.get(un, 0)
+    has_copy = inventory.is_finished(un)
+    needed_builds = _compute_needed_builds(un, inventory)
+    extra = inventory.extra_builds.get(un, 0)
 
     # An item in the foundry is neither owned yet nor still to be built; its
     # parts (including the consumed blueprint) are already committed.
-    if not has_copy and pending and norm in pending:
+    if not has_copy and inventory.is_crafting(un):
         return _make_item_result(
             name,
             cat,
@@ -1532,10 +1225,10 @@ def _classify_prime_item(
         ), None
 
     part_analysis, missing_parts = _analyze_parts(
-        info, prime_map, needed_builds, owned, owned_finished, comp_to_bp=comp_to_bp
+        info, item_data.prime_map, needed_builds, inventory, comp_to_bp=comp_to_bp
     )
     subcraft_parts, subcraft_missing = _analyze_subcraft_parts(
-        info, prime_map, needed_builds, owned
+        info, item_data.prime_map, needed_builds, inventory
     )
     if subcraft_parts:
         part_analysis.extend(subcraft_parts)
@@ -1567,7 +1260,7 @@ def _classify_prime_item(
             0,
             part_analysis,
         ), None
-    elif any(p.owned > 0 for p in part_analysis):
+    elif any(part.owned > 0 for part in part_analysis):
         return _make_item_result(
             name,
             cat,
@@ -1586,17 +1279,8 @@ def _classify_prime_item(
     return None, None
 
 
-def analyze(
-    inventory: dict,
-    prime_map: dict[str, dict],
-    equipment_sections: list[str],
-    mastered: set[str] | None = None,
-    recipes: dict | None = None,
-    owned: dict[str, int] | None = None,
-    owned_finished: set[str] | None = None,
-    extra_builds: dict[str, int] | None = None,
-) -> AnalysisResult:
-    """Cross-reference inventory against prime_map.
+def analyze(item_data: ItemData, inventory: Inventory) -> AnalysisResult:
+    """Cross-reference an inventory snapshot against the Prime item index.
 
     This is the **main analysis pipeline** for the ``ducats`` sub-command.
     It classifies every Prime item into one of four statuses:
@@ -1608,51 +1292,32 @@ def analyze(
       already committed, so it is not counted as owned or buildable.
     * ``partial`` — some parts owned, some missing.
     * Missing — zero parts owned (added to ``missing_primes`` list).
-
-    Two phases:
-    1. Extra-build calculation — determine how many copies of sub-craft
-       dependencies must be built.
-    2. Per-item analysis — for each Prime, compute owned/needed/surplus/missing
-       for every tradable component, and aggregate ducat values.
     """
-    owned = owned if owned is not None else build_owned(inventory, recipes=recipes)
-    owned_finished = (
-        owned_finished
-        if owned_finished is not None
-        else compute_owned_finished(inventory, equipment_sections, mastered)
-    )
-    extra_builds = (
-        extra_builds
-        if extra_builds is not None
-        else compute_extra_builds(prime_map, owned, owned_finished)
-    )
-    comp_to_bp = build_component_blueprint_map(recipes or {}, prime_map)
-    pending = set(parse_pending_recipes(inventory, recipes))
+    comp_to_bp = item_data.component_blueprint_map
 
     results: list[ItemResult] = []
     missing_primes: list[MissingPrime] = []
     total_ducats_safe = 0
     total_ducats_keep = 0
 
-    for un, info in prime_map.items():
+    for un, info in item_data.prime_map.items():
         if info["is_cosmetic"]:
             continue
 
         item_result, missing_prime = _classify_prime_item(
             un,
             info,
-            owned,
-            owned_finished,
-            extra_builds,
-            prime_map,
+            item_data,
+            inventory,
             comp_to_bp=comp_to_bp,
-            pending=pending,
         )
 
         if item_result:
             results.append(item_result)
-            total_ducats_safe += sum(p.surplus * p.ducats for p in item_result.parts)
-            total_ducats_keep += sum((p.owned - p.surplus) * p.ducats for p in item_result.parts)
+            total_ducats_safe += sum(part.surplus * part.ducats for part in item_result.parts)
+            total_ducats_keep += sum(
+                (part.owned - part.surplus) * part.ducats for part in item_result.parts
+            )
         if missing_prime:
             missing_primes.append(missing_prime)
 

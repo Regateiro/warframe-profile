@@ -1,16 +1,23 @@
 """Tests for relic reward-name matching and needed drops."""
 
+from types import SimpleNamespace
+
 from warframe_profile.model.analysis import (
     _reward_names_for_part,
     build_needed_drops,
-    build_owned,
-    build_prime_map,
+    build_relics_map,
 )
-from warframe_profile.model.inventory import EQUIPMENT_SECTIONS
+from warframe_profile.model.data import Inventory, ItemData
 
 _VALKYR = "/Lotus/Powersuits/Berserker/ValkyrPrime"
 _CHASSIS = "/Lotus/Types/Recipes/WarframeRecipes/ValkyrPrimeChassisComponent"
 _RELIC = "/Lotus/Types/Game/Projections/T4VoidProjectionValkyrPrimeKey"
+
+_NAUTILUS = "/Lotus/Types/Sentinels/SentinelPowersuits/NautilusPrimeSentinelPowerSuit"
+_NAUTILUS_BP = "/Lotus/Types/Recipes/SentinelRecipes/NautilusPrimeSentinelBlueprint"
+_NAUTILUS_CHASSIS = "/Lotus/Types/Recipes/SentinelRecipes/NautilusPrimeChassisComponent"
+_NAUTILUS_CHASSIS_BP = "/Lotus/Types/Recipes/SentinelRecipes/NautilusPrimeChassisBlueprint"
+_NAUTILUS_RELIC = "/Lotus/Types/Game/Projections/T4VoidProjectionNautilusPrimeKey"
 
 
 def test_frame_component_reward_appends_blueprint():
@@ -45,6 +52,13 @@ def test_weapon_part_reward_has_no_blueprint_suffix():
     ]
 
 
+def _state(items: list[dict], inventory: dict, recipes: dict | None = None):
+    raw = {"items": items, "recipes": recipes or {}, "dict": {}}
+    db = SimpleNamespace(items=items, recipes=raw["recipes"], locale={}, raw=raw)
+    item_data = ItemData(db)
+    return item_data, Inventory(inventory, item_data)
+
+
 def _items() -> list[dict]:
     return [
         {
@@ -66,7 +80,7 @@ def _items() -> list[dict]:
             "uniqueName": _RELIC,
             "name": "Axi V10 Intact",
             "category": "Relics",
-            "rewards": [{"item": {"name": "Valkyr Prime Chassis Blueprint"}}],
+            "rewards": [{"item": {"name": "Valkyr Prime Chassis Blueprint"}, "rarity": "Rare"}],
         },
     ]
 
@@ -74,12 +88,69 @@ def _items() -> list[dict]:
 def test_needed_drops_match_warframe_relic_rewards():
     items = _items()
     inventory = {"MiscItems": [{"ItemType": _RELIC, "ItemCount": 1}]}
-    prime_map = build_prime_map(items)
-    owned = build_owned(inventory)
+    item_data, state = _state(items, inventory)
 
-    needed = build_needed_drops(items, inventory, prime_map, owned, EQUIPMENT_SECTIONS)
+    needed = build_needed_drops(item_data, state)
 
     assert len(needed) == 1
     drop = needed[0]
     assert drop.part_name == "Valkyr Prime Chassis Blueprint"
-    assert drop.drops == [("Axi V10", 1, "Axi")]
+    assert drop.drops == [("Axi V10", 1, "Axi", "Rare")]
+
+
+def _nautilus_items() -> list[dict]:
+    return [
+        {
+            "uniqueName": _NAUTILUS,
+            "name": "Nautilus Prime",
+            "category": "Sentinels",
+            "masterable": True,
+            "components": [
+                {
+                    "uniqueName": _NAUTILUS_CHASSIS,
+                    "name": "Nautilus Prime Chassis",
+                    "itemCount": 1,
+                    "tradable": True,
+                    "primeSellingPrice": 100,
+                }
+            ],
+        },
+        {
+            "uniqueName": _NAUTILUS_RELIC,
+            "name": "Axi N1 Intact",
+            "category": "Relics",
+            "rewards": [{"item": {"name": "Nautilus Prime Chassis"}, "rarity": "Rare"}],
+        },
+    ]
+
+
+def test_pending_parent_item_covers_its_missing_parts():
+    items = _nautilus_items()
+    inventory = {
+        "MiscItems": [{"ItemType": _NAUTILUS_RELIC, "ItemCount": 1}],
+        "PendingRecipes": [{"ItemType": _NAUTILUS_BP}],
+    }
+    recipes = {_NAUTILUS_BP: {"resultType": _NAUTILUS}}
+    item_data, state = _state(items, inventory, recipes)
+
+    needed = build_needed_drops(item_data, state)
+    relics = build_relics_map(item_data, state)
+
+    assert needed == []
+    assert relics[0].safe is True
+
+
+def test_pending_component_covers_its_own_missing_part():
+    items = _nautilus_items()
+    inventory = {
+        "MiscItems": [{"ItemType": _NAUTILUS_RELIC, "ItemCount": 1}],
+        "PendingRecipes": [{"ItemType": _NAUTILUS_CHASSIS_BP}],
+    }
+    recipes = {_NAUTILUS_CHASSIS_BP: {"resultType": _NAUTILUS_CHASSIS}}
+    item_data, state = _state(items, inventory, recipes)
+
+    needed = build_needed_drops(item_data, state)
+    relics = build_relics_map(item_data, state)
+
+    assert needed == []
+    assert relics[0].safe is True

@@ -2,7 +2,8 @@
 
 from types import SimpleNamespace
 
-from warframe_profile.presenter.mastery import analyze_mastery, build_mastery_report
+from warframe_profile.model.data import Inventory, ItemData
+from warframe_profile.model.mastery import analyze_mastery, build_mastery_report
 
 _ITEM = {
     "uniqueName": "/Lotus/Weapons/Tenno/LongGuns/PrimeCedo/PrimeCedoWeapon",
@@ -35,14 +36,21 @@ _KDRIVE_ITEM = {
 }
 
 
-def _db(recipes: dict | None = None, items: list[dict] | None = None):
+def _db(recipes: dict | None = None, items: list[dict] | None = None) -> ItemData:
     recipes = recipes or {}
     items = items or [_ITEM]
-    return SimpleNamespace(
-        items=items,
-        raw={"items": items, "recipes": recipes},
-        recipes=recipes,
-    )
+    raw = {"items": items, "recipes": recipes, "dict": {}}
+    return ItemData(SimpleNamespace(items=items, raw=raw, recipes=recipes, locale={}))
+
+
+def _analyze(inventory: dict, recipes: dict | None = None, items: list[dict] | None = None):
+    item_data = _db(recipes, items)
+    return analyze_mastery(item_data, Inventory(inventory, item_data))
+
+
+def _report(inventory: dict, recipes: dict | None = None, items: list[dict] | None = None):
+    item_data = _db(recipes, items)
+    return build_mastery_report(item_data, Inventory(inventory, item_data))
 
 
 def _recipe() -> dict:
@@ -59,9 +67,7 @@ def _recipe() -> dict:
 def test_owned_zero_xp_item_is_unmastered_owned():
     inventory = {"LongGuns": [{"ItemType": _ITEM["uniqueName"], "XP": 0}]}
 
-    total, mastered, ready, owned_blueprints, missing, in_progress = analyze_mastery(
-        _db(), inventory
-    )
+    total, mastered, ready, owned_blueprints, missing, in_progress = _analyze(inventory)
 
     assert total == 1
     assert mastered == 0
@@ -72,7 +78,7 @@ def test_owned_zero_xp_item_is_unmastered_owned():
 
 
 def test_unowned_item_without_blueprint_is_missing_blueprints():
-    total, mastered, ready, owned_blueprints, missing, in_progress = analyze_mastery(_db(), {})
+    total, mastered, ready, owned_blueprints, missing, in_progress = _analyze({})
 
     assert total == 1
     assert mastered == 0
@@ -85,8 +91,8 @@ def test_unowned_item_without_blueprint_is_missing_blueprints():
 def test_unowned_item_with_blueprint_only_is_owned_blueprints():
     inventory = {"Recipes": [{"ItemType": _BLUEPRINT, "ItemCount": 1}]}
 
-    _, _, ready, owned_blueprints, missing, _ = analyze_mastery(
-        _db(_recipe(), [_ITEM, _MATERIAL_ITEM]), inventory
+    _, _, ready, owned_blueprints, missing, _ = _analyze(
+        inventory, _recipe(), [_ITEM, _MATERIAL_ITEM]
     )
 
     assert ready == []
@@ -100,8 +106,8 @@ def test_unowned_item_with_all_blueprints_and_materials_is_ready():
         "MiscItems": [{"ItemType": _MATERIAL, "ItemCount": 3}],
     }
 
-    _, _, ready, owned_blueprints, missing, _ = analyze_mastery(
-        _db(_recipe(), [_ITEM, _MATERIAL_ITEM]), inventory
+    _, _, ready, owned_blueprints, missing, _ = _analyze(
+        inventory, _recipe(), [_ITEM, _MATERIAL_ITEM]
     )
 
     assert [item["name"] for item, _ in ready] == ["Cedo Prime"]
@@ -112,7 +118,7 @@ def test_unowned_item_with_all_blueprints_and_materials_is_ready():
 def test_report_sections_use_new_names_and_order():
     inventory = {"LongGuns": [{"ItemType": _ITEM["uniqueName"], "XP": 0}]}
 
-    report = build_mastery_report(_db(), inventory)
+    report = _report(inventory)
 
     assert [section.header for section in report.sections] == [
         "UNMASTERED OWNED ITEMS",
@@ -124,14 +130,9 @@ def test_report_sections_use_new_names_and_order():
 
 
 def test_loose_modular_component_is_not_owned():
-    db = SimpleNamespace(
-        items=[_KDRIVE_ITEM],
-        raw={"items": [_KDRIVE_ITEM], "recipes": {}},
-        recipes={},
-    )
     inventory = {"MiscItems": [{"ItemType": _KDRIVE_ITEM["uniqueName"], "ItemCount": 1}]}
 
-    _, _, ready, owned_blueprints, missing, in_progress = analyze_mastery(db, inventory)
+    _, _, ready, owned_blueprints, missing, in_progress = _analyze(inventory, items=[_KDRIVE_ITEM])
 
     assert ready == []
     assert in_progress == []
@@ -149,17 +150,14 @@ def test_modular_component_with_blueprint_is_owned_blueprints():
             "consumeOnUse": True,
         }
     }
-    db = SimpleNamespace(
-        items=[_KDRIVE_ITEM],
-        raw={"items": [_KDRIVE_ITEM], "recipes": recipes},
-        recipes=recipes,
-    )
     inventory = {
         "MiscItems": [{"ItemType": _KDRIVE_ITEM["uniqueName"], "ItemCount": 1}],
         "Recipes": [{"ItemType": blueprint, "ItemCount": 1}],
     }
 
-    _, _, ready, owned_blueprints, missing, in_progress = analyze_mastery(db, inventory)
+    _, _, ready, owned_blueprints, missing, in_progress = _analyze(
+        inventory, recipes, [_KDRIVE_ITEM]
+    )
 
     assert ready == []
     assert in_progress == []
@@ -168,11 +166,6 @@ def test_modular_component_with_blueprint_is_owned_blueprints():
 
 
 def test_assembled_modular_parts_count_as_owned():
-    db = SimpleNamespace(
-        items=[_KDRIVE_ITEM],
-        raw={"items": [_KDRIVE_ITEM], "recipes": {}},
-        recipes={},
-    )
     inventory = {
         "Hoverboards": [
             {
@@ -182,7 +175,7 @@ def test_assembled_modular_parts_count_as_owned():
         ]
     }
 
-    _, _, ready, owned_blueprints, missing, in_progress = analyze_mastery(db, inventory)
+    _, _, ready, owned_blueprints, missing, in_progress = _analyze(inventory, items=[_KDRIVE_ITEM])
 
     assert ready == []
     assert missing == []

@@ -2,12 +2,14 @@
 weapon-chain analysis.
 
 This module contains only pure data-processing functions (the **model**
-in MVP).  Presentation (ANSI colour, PrettyTable, ``print()``) lives in
-:mod:`warframe_profile.report`; orchestration lives in
-:mod:`warframe_profile.scripts.craft_tree`.
+in MVP).  Presentation lives in :mod:`warframe_profile.view.report` /
+:mod:`warframe_profile.view.web.templates`; orchestration lives in
+:mod:`warframe_profile.presenter.craft_tree`.
 
 The main entry points are:
 
+* :class:`CraftNode` / :class:`CraftTree` / :class:`CraftPlan` — display-ready
+  tree structures produced by :class:`~warframe_profile.model.data.ItemData`.
 * :func:`resolve_tree` — recursively expand a crafting tree for a given item.
 * :func:`build_weapon_chains` — find weapon upgrade paths (e.g. MK1-Braton
   → Braton → Braton Prime) where the final tier is unowned.
@@ -22,11 +24,49 @@ Data flow:
      → ``preserve_blueprints`` to produce the final aggregated view.
 """
 
+from __future__ import annotations
+
 import math
 import re
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from warframe_profile.model.utils import normalize_path
+
+if TYPE_CHECKING:
+    from warframe_profile.model.data import Inventory, ItemData
+
+
+@dataclass
+class CraftNode:
+    """One display-ready node in a resolved crafting tree."""
+
+    name: str
+    quantity: int
+    owned: int
+    reusable: bool = False
+    children: list[CraftNode] = field(default_factory=list)
+
+
+@dataclass
+class CraftTree:
+    """Display-ready crafting tree for a requested item."""
+
+    name: str
+    nodes: list[CraftNode] = field(default_factory=list)
+
+
+@dataclass
+class CraftPlan:
+    """Complete, display-ready crafting plan for one item."""
+
+    name: str
+    category: str
+    tree: CraftTree
+    requirements: dict
+    craftables: dict
+
 
 # ---------------------------------------------------------------------------
 # Index builders
@@ -828,33 +868,28 @@ def _find_chains(
 
 def _aggregate_chain_requirements(
     chain: list[str],
-    items_by_un: dict,
-    owned: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
+    item_data: ItemData,
+    inventory: Inventory,
     all_requirements: dict,
     all_craftables: dict,
     max_depth: int,
 ) -> None:
     """Resolve crafting tree for one chain and merge into accumulators."""
     final_un = chain[-1]
-    final_norm = normalize_path(final_un)
-    if owned.get(final_norm, 0) > 0:
+    if inventory.is_owned(final_un):
         return
 
-    req, craft = resolve_tree(
-        final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )
+    req, craft = item_data.resolve_tree(final_un, 1, inventory, max_depth=max_depth)
     merge_dicts(all_requirements, req, "quantity")
     merge_dicts(all_craftables, craft, "quantity")
 
-    recipe = recipes_by_result.get(final_un.lower())
+    recipe = item_data.recipe_for(final_un)
     if recipe:
         bp_key = recipe.get("_recipeKey", "")
         if bp_key:
-            bp_owned = owned.get(normalize_path(bp_key), 0)
+            bp_owned = inventory.count(bp_key)
             if bp_owned < 1:
-                names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
+                names = [item_data.weapon_name(un) for un in chain]
                 bp_name = f"{names[-1]} Blueprint"
                 key = bp_key.lower()
                 if key in all_requirements:
@@ -864,14 +899,11 @@ def _aggregate_chain_requirements(
 
 
 def build_weapon_chains(
-    items_by_un: dict,
-    recipes_by_result: dict,
-    owned: dict,
-    loc_dict: dict,
-    mastered: set[str] | None = None,
+    item_data: ItemData,
+    inventory: Inventory,
     max_depth: int = 5,
 ) -> tuple[list[list[str]], dict, dict, int]:
-    """Build weapon upgrade chains whose final weapon is neither owned nor mastered.
+    """Build weapon upgrade chains whose final weapon is not owned or crafting.
 
     The returned chain list is already filtered, so both the CLI and the web
     view can render it directly; the final integer mirrors its length.
@@ -879,10 +911,12 @@ def build_weapon_chains(
     from warframe_profile.model.analysis import WEAPON_CATEGORIES
 
     weapon_uns = {
-        un_lower for un_lower, item in items_by_un.items() if categorize(item) in WEAPON_CATEGORIES
+        un_lower
+        for un_lower, item in item_data.items_by_un.items()
+        if categorize(item) in WEAPON_CATEGORIES
     }
 
-    builds_into, built_from = _build_weapon_graph(recipes_by_result, weapon_uns)
+    builds_into, built_from = _build_weapon_graph(item_data.recipes_by_result, weapon_uns)
     chains = _find_chains(weapon_uns, builds_into, built_from)
 
     all_requirements: dict[str, dict] = {}
@@ -890,18 +924,12 @@ def build_weapon_chains(
     shown_chains: list[list[str]] = []
 
     for chain in chains:
-        final_un = chain[-1]
-        final_norm = normalize_path(final_un)
-        if owned.get(final_norm, 0) > 0:
-            continue
-        if mastered and final_norm in mastered:
+        if inventory.is_owned(chain[-1]):
             continue
         _aggregate_chain_requirements(
             chain,
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
+            item_data,
+            inventory,
             all_requirements,
             all_craftables,
             max_depth,

@@ -15,7 +15,6 @@ All data is loaded once at startup (in ``load_all``) and analysis results
 are computed lazily when first requested.
 """
 
-import functools
 import html
 import http.server
 import os
@@ -27,43 +26,9 @@ import traceback
 import urllib.parse
 
 from warframe_profile import DATA_DIR
-from warframe_profile.model.analysis import (
-    AnalysisResult,
-    ExcessItem,
-    NeededPart,
-    RelicInfo,
-    SellableEquipment,
-    analyze,
-    build_item_index,
-    build_needed_drops,
-    build_prime_map,
-    build_regular_to_prime_map,
-    build_relics_map,
-    compute_extra_builds,
-    compute_owned_finished,
-    compute_sellable_equipment,
-    find_excess_blueprints_and_components,
-    find_owned_item_uns,
-    find_owned_prime_uns,
-)
-from warframe_profile.model.craft_model import (
-    build_items_by_un,
-    build_lookup,
-    build_recipes_by_result,
-    build_weapon_chains,
-    find_items,
-)
+from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
-from warframe_profile.model.inventory import (
-    EQUIPMENT_SECTIONS,
-    ExportDB,
-    build_mastered_set,
-    build_owned,
-    load_inventory_with_fallback,
-)
-from warframe_profile.model.utils import normalize_path
-from warframe_profile.presenter.mastery import MasteryReport, build_mastery_report
-from warframe_profile.presenter.missing_mods import ModsReport, build_mods_report
+from warframe_profile.model.inventory import load_inventory_with_fallback
 from warframe_profile.view.web.templates import (
     relic_category_tabs,
     render_cleanup_excess,
@@ -78,6 +43,7 @@ from warframe_profile.view.web.templates import (
     render_mastery_owned_items,
     render_mastery_ready,
     render_mods,
+    render_primes,
     render_relics_needed,
     render_relics_safe,
     render_weapon_chains,
@@ -133,49 +99,23 @@ HOST = _parse_host()
 
 
 class DataCache:
-    """Singleton holding all loaded data and lazy-computed analysis caches.
+    """Singleton holding the item database and the current inventory snapshot.
 
-    Attributes are populated by ``load_all`` (called at startup) and the
-    ``_ensure_*`` methods (called on first request).  Every derived value is
-    reset by :meth:`reset` when the inventory is refreshed.
+    All derived state lives on :class:`Inventory` (owned counts, foundry
+    results, mods, relics, analyses).  Replacing the inventory object therefore
+    invalidates every derived analysis atomically.
     """
 
     def __init__(self) -> None:
         """Initialise the cache to its empty state."""
-        self.db: ExportDB | None = None
+        self.item_data: ItemData | None = None
+        self.inventory: Inventory | None = None
         self.items_cache: str = ""
         self.inventory_path: str = ""
-        self.inventory: dict = {}
-        self.owned: dict = {}
-        self.mastered: set[str] = set()
-        self.items_by_un: dict = {}
-        self.recipes_by_result: dict = {}
-        self.loc_dict: dict = {}
-        self.by_name: dict = {}
-        self.reset()
-
-    def reset(self) -> None:
-        """Drop every lazily-computed result derived from the inventory."""
-        # Analysis caches (lazy-computed via _ensure_* methods)
-        self.prime_map: dict[str, dict] | None = None
-        self.owned_finished: set[str] | None = None
-        self.extra_builds: dict[str, int] | None = None
-        self.analysis_result: AnalysisResult | None = None
-        self.relic_info: list[RelicInfo] | None = None
-        self.needed_drops: list[NeededPart] | None = None
-        self.sellable: list[SellableEquipment] | None = None
-        self.owned_prime_pairs: list[tuple[str, str, str]] | None = None
-        self.excess_items: list[ExcessItem] | None = None
-        self.weapon_chains: tuple[list[list[str]], dict, dict, int] | None = None
-        self.mastery_report: MasteryReport | None = None
-        self.mods_report: ModsReport | None = None
 
 
 _cache = DataCache()
-# Guards the lazy ``_ensure_*`` population and the /refresh reload.  The
-# server is threaded, so unlocked check-then-act would double-compute (and
-# potentially expose torn state) on concurrent first requests.  Re-entrant
-# because the ``_ensure_*`` helpers nest (e.g. analysis → prime map).
+# Guards cache swaps during refresh and request handling.
 _cache_lock = threading.RLock()
 # Serialises item-database refreshes.  Downloading + merging takes a while and
 # must not run twice concurrently; the lock is only held by the refresh
@@ -197,85 +137,54 @@ def _with_notice(path: str, message: str, *, error: bool = True) -> str:
     )
 
 
-def _require_db() -> ExportDB:
+def _require_item_data() -> ItemData:
     """Return the loaded item database, or raise if startup loading hasn't run."""
-    db = _cache.db
-    if db is None:
+    item_data = _cache.item_data
+    if item_data is None:
         raise RuntimeError("Item database not loaded; call load_all() at startup first")
-    return db
+    return item_data
+
+
+def _require_inventory() -> Inventory:
+    """Return the current inventory snapshot, or raise if it is not loaded."""
+    inventory = _cache.inventory
+    if inventory is None:
+        raise RuntimeError("Inventory not loaded; call load_all() at startup first")
+    return inventory
 
 
 def load_db(items_cache: str) -> None:
-    """Load the item database and atomically swap its static indices.
-
-    The database and all derived indices are built off to the side and then
-    swapped under ``_cache_lock``, so concurrent requests never observe a new
-    database paired with stale indices.
-    """
-    db = ExportDB(items_cache)
-    db.load()
-    data = db.raw
-    items_by_un = build_items_by_un(data)
-    recipes_by_result = build_recipes_by_result(data)
-    loc_dict = data.get("dict", {})
-    by_name = build_lookup(items_by_un, loc_dict)
+    """Load the item database and swap it in atomically."""
+    item_data = ItemData.from_path(items_cache)
 
     with _cache_lock:
-        _cache.db = db
+        _cache.item_data = item_data
         _cache.items_cache = items_cache
-        _cache.items_by_un = items_by_un
-        _cache.recipes_by_result = recipes_by_result
-        _cache.loc_dict = loc_dict
-        _cache.by_name = by_name
-        _cache.reset()
+        if _cache.inventory is not None:
+            _cache.inventory = Inventory(_cache.inventory.raw, item_data)
 
 
 def rebuild_derived_state() -> None:
-    """Recompute inventory-derived indices after the item database changes."""
+    """Rebuild the inventory snapshot after the item database changes."""
     with _cache_lock:
-        _cache.mastered = build_mastered_set(_cache.inventory)
-        _cache.owned = build_owned(_cache.inventory, _require_db().recipes)
-        _cache.reset()
+        if _cache.inventory is not None:
+            _cache.inventory = Inventory(_cache.inventory.raw, _require_item_data())
 
 
 def reload_inventory(inventory_path: str, refresh: bool = False) -> None:
-    """(Re)load the player inventory and derived ownership data.
-
-    The item database is *not* touched — it only changes on ``update``.
-    """
+    """(Re)load the player inventory and derived ownership data."""
     inv, _ = load_inventory_with_fallback(inventory_path, refresh)
+    item_data = _require_item_data()
     with _cache_lock:
         _cache.inventory_path = inventory_path
-        _cache.inventory = inv
-        _cache.mastered = build_mastered_set(inv)
-        _cache.owned = build_owned(inv, _require_db().raw.get("recipes", {}))
+        _cache.inventory = Inventory(inv, item_data)
 
 
 def invalidate_analysis() -> None:
-    """Drop every lazily-computed result derived from the inventory."""
-    _cache.reset()
-
-
-def _lazy(attr: str):
-    """Return a decorator that computes a cache attribute at most once.
-
-    The server is threaded, so an unlocked check-then-act would double-compute
-    on concurrent first requests.  The attribute is re-checked under the cache
-    lock; the decorated function is expected to write ``_cache.<attr>``.
-    """
-
-    def decorator(fn):
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            if getattr(_cache, attr) is not None:
-                return
-            with _cache_lock:
-                if getattr(_cache, attr) is None:
-                    fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+    """Drop every derived analysis by rebuilding the inventory snapshot."""
+    with _cache_lock:
+        if _cache.inventory is not None:
+            _cache.inventory = Inventory(_cache.inventory.raw, _require_item_data())
 
 
 def _is_same_origin_request(origin: str, referer: str, host: str) -> bool:
@@ -297,136 +206,6 @@ def load_all(items_cache: str, inventory_path: str, refresh: bool = False) -> No
     """Load the item database and inventory (called once at server startup)."""
     load_db(items_cache)
     reload_inventory(inventory_path, refresh)
-
-
-@_lazy("prime_map")
-def _ensure_prime_map():
-    """Build the prime map once (shared by the ducat and relic analyses)."""
-    _cache.prime_map = build_prime_map(_require_db().raw.get("items", []))
-
-
-@_lazy("owned_finished")
-def _ensure_owned_state():
-    """Build ``owned_finished`` / ``extra_builds`` once per inventory load."""
-    _ensure_prime_map()
-    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-    _cache.owned_finished = compute_owned_finished(
-        _cache.inventory, EQUIPMENT_SECTIONS, _cache.mastered
-    )
-    _cache.extra_builds = compute_extra_builds(
-        _cache.prime_map, _cache.owned, _cache.owned_finished
-    )
-
-
-@_lazy("analysis_result")
-def _ensure_analysis():
-    """Lazy-load ducat analysis: Prime map, analysis result, sellable equipment,
-    and owned prime pairs."""
-    items = _require_db().items
-    _ensure_prime_map()
-    _ensure_owned_state()
-    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-    prime_map = _cache.prime_map
-    _cache.analysis_result = analyze(
-        _cache.inventory,
-        prime_map,
-        EQUIPMENT_SECTIONS,
-        mastered=_cache.mastered,
-        recipes=_require_db().recipes,
-        owned=_cache.owned,
-        owned_finished=_cache.owned_finished,
-        extra_builds=_cache.extra_builds,
-    )
-    _cache.sellable = compute_sellable_equipment(
-        _require_db(),
-        _cache.inventory,
-        EQUIPMENT_SECTIONS,
-    )
-    # CLI parity: print_report reads sellable off the analysis result.
-    _cache.analysis_result.sellable = _cache.sellable
-    item_index = build_item_index(items)
-    reg_to_prime = build_regular_to_prime_map(items)
-    owned_regular = find_owned_item_uns(_cache.inventory, item_index, EQUIPMENT_SECTIONS)
-    owned_primes = find_owned_prime_uns(_cache.inventory, prime_map, EQUIPMENT_SECTIONS)
-    _cache.owned_prime_pairs = []
-    for reg_un in owned_regular:
-        pi = reg_to_prime.get(reg_un)
-        if pi and pi["prime_un"] in owned_primes:
-            item = _cache.items_by_un.get(normalize_path(reg_un), {})
-            _cache.owned_prime_pairs.append(
-                (
-                    item.get("name", reg_un),
-                    item.get("category", ""),
-                    pi["prime_name"],
-                )
-            )
-
-
-@_lazy("excess_items")
-def _ensure_excess():
-    """Lazy-load excess blueprints and components analysis."""
-    _ensure_owned_state()
-    assert _cache.owned_finished is not None  # guaranteed by _ensure_owned_state
-    _cache.excess_items = find_excess_blueprints_and_components(
-        _cache.inventory,
-        _cache.items_by_un,
-        _require_db().recipes,
-        _cache.owned_finished,
-        _cache.loc_dict,
-        mastered=_cache.mastered,
-    )
-
-
-@_lazy("relic_info")
-def _ensure_relics():
-    """Lazy-load relic analysis: safe-to-spam relics and needed drops."""
-    items = _require_db().items
-    _ensure_owned_state()
-    assert _cache.prime_map is not None  # guaranteed by _ensure_prime_map
-    _cache.relic_info = build_relics_map(
-        items,
-        _cache.inventory,
-        _cache.prime_map,
-        _cache.owned,
-        EQUIPMENT_SECTIONS,
-        mastered=_cache.mastered,
-        owned_finished=_cache.owned_finished,
-        extra_builds=_cache.extra_builds,
-    )
-    _cache.needed_drops = build_needed_drops(
-        items,
-        _cache.inventory,
-        _cache.prime_map,
-        _cache.owned,
-        EQUIPMENT_SECTIONS,
-        mastered=_cache.mastered,
-        owned_finished=_cache.owned_finished,
-        extra_builds=_cache.extra_builds,
-    )
-
-
-@_lazy("weapon_chains")
-def _ensure_weapon_chains():
-    """Lazy-load weapon upgrade chains."""
-    _cache.weapon_chains = build_weapon_chains(
-        _cache.items_by_un,
-        _cache.recipes_by_result,
-        _cache.owned,
-        _cache.loc_dict,
-        mastered=_cache.mastered,
-    )
-
-
-@_lazy("mastery_report")
-def _ensure_mastery():
-    """Lazy-load the mastery progression report."""
-    _cache.mastery_report = build_mastery_report(_require_db(), _cache.inventory)
-
-
-@_lazy("mods_report")
-def _ensure_mods():
-    """Lazy-load the missing-mods report."""
-    _cache.mods_report = build_mods_report(_require_db(), _cache.inventory)
 
 
 # ---------------------------------------------------------------------------
@@ -493,20 +272,32 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         if subpath:
             self._not_found()
             return
-        _ensure_analysis()
-        self._html(200, render_ducats(_cache.analysis_result))
+        self._html(200, render_ducats(_require_inventory().analysis))
+
+    def _handle_primes(self, subpath: str):
+        """Serve the missing-Prime-parts views (type, relic age, rarity)."""
+        if subpath == "/age":
+            view = "age"
+        elif subpath == "/rarity":
+            view = "rarity"
+        elif subpath:
+            self._not_found()
+            return
+        else:
+            view = "type"
+        self._html(200, render_primes(_require_inventory().needed_drops, view))
 
     def _handle_relics(self, subpath: str):
         """Serve relic views: Safe to Spam default, then needed item types."""
-        _ensure_relics()
+        inventory = _require_inventory()
         if not subpath:
-            self._html(200, render_relics_safe(_cache.needed_drops, _cache.relic_info))
+            self._html(200, render_relics_safe(inventory.needed_drops, inventory.relic_info))
             return
         if subpath.startswith("/needed/"):
             slug = subpath.removeprefix("/needed/")
-            tabs = relic_category_tabs(_cache.needed_drops)
+            tabs = relic_category_tabs(inventory.needed_drops)
             if any(key == slug for key, _, _ in tabs):
-                self._html(200, render_relics_needed(_cache.needed_drops, slug))
+                self._html(200, render_relics_needed(inventory.needed_drops, slug))
             else:
                 self._not_found()
             return
@@ -517,19 +308,15 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         if not query:
             self._html(200, render_craft())
             return
-        matches = find_items(query, _cache.by_name)
+        item_data = _require_item_data()
+        inventory = _require_inventory()
+        matches = item_data.find(query)
         if matches:
-            self._html(
-                200,
-                render_craft_result(
-                    query,
-                    matches[:5],
-                    _cache.items_by_un,
-                    _cache.recipes_by_result,
-                    _cache.owned,
-                    _cache.loc_dict,
-                ),
-            )
+            plans = [
+                item_data.craft_plan(match["uniqueName"], inventory, max_depth=3)
+                for match in matches[:5]
+            ]
+            self._html(200, render_craft_result(query, plans))
         else:
             self._html(
                 200,
@@ -538,28 +325,24 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_weapon_chains(self):
         """Serve the weapon upgrade chains view."""
-        _ensure_weapon_chains()
-        assert _cache.weapon_chains is not None  # guaranteed by _ensure_weapon_chains
-        chains, req, craft, shown = _cache.weapon_chains
+        item_data = _require_item_data()
+        inventory = _require_inventory()
+        chains, requirements, craftables, shown = inventory.weapon_chains
+        chain_views = [
+            (
+                [item_data.weapon_name(un) for un in chain],
+                item_data.craft_plan(chain[-1], inventory, max_depth=5),
+            )
+            for chain in chains
+        ]
         self._html(
             200,
-            render_weapon_chains(
-                chains,
-                req,
-                craft,
-                shown,
-                _cache.items_by_un,
-                _cache.recipes_by_result,
-                _cache.owned,
-                _cache.loc_dict,
-            ),
+            render_weapon_chains(chain_views, requirements, craftables, shown),
         )
 
     def _handle_mastery(self, subpath: str):
         """Serve mastery sub-views (owned items, ready, blueprints)."""
-        _ensure_mastery()
-        assert _cache.mastery_report is not None  # guaranteed by _ensure_mastery
-        report = _cache.mastery_report
+        report = _require_inventory().mastery_report
 
         if subpath == "/ready":
             self._html(200, render_mastery_ready(report))
@@ -574,9 +357,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_mods(self):
         """Serve the missing-mods view."""
-        _ensure_mods()
-        assert _cache.mods_report is not None  # guaranteed by _ensure_mods
-        self._html(200, render_mods(_cache.mods_report))
+        self._html(200, render_mods(_require_inventory().mods_report))
 
     def _handle_refresh_items(self) -> None:
         """Re-download the merged item database and rebuild its indices."""
@@ -628,23 +409,15 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_cleanup(self, subpath: str):
         """Serve cleanup sub-views (rebuy / sell / excess)."""
+        inventory = _require_inventory()
         if subpath == "/sell":
-            _ensure_analysis()
-            self._html(
-                200,
-                render_cleanup_sell(_cache.owned_prime_pairs),
-            )
+            self._html(200, render_cleanup_sell(inventory.owned_prime_pairs))
         elif subpath == "/excess":
-            _ensure_excess()
-            self._html(200, render_cleanup_excess(_cache.excess_items))
+            self._html(200, render_cleanup_excess(inventory.excess_items))
         elif subpath:
             self._not_found()
         else:
-            _ensure_analysis()
-            self._html(
-                200,
-                render_cleanup_rebuy(_cache.sellable),
-            )
+            self._html(200, render_cleanup_rebuy(inventory.sellable_equipment))
 
     def do_GET(self):
         """Route GET requests to the appropriate handler based on URL path.
@@ -652,6 +425,9 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         Routes:
             /               → Home
             /ducats         → Ducat sell analysis
+            /primes         → Missing Prime parts and owned relic drops
+            /primes/age     → Same list grouped by relic age
+            /primes/rarity  → Same list grouped by drop rarity
             /relics[/...]   → Safe-to-spam relics + needed drops by item type
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
@@ -668,6 +444,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_home()
             elif path.startswith("/ducats"):
                 self._handle_ducats(path.removeprefix("/ducats"))
+            elif path.startswith("/primes"):
+                self._handle_primes(path.removeprefix("/primes"))
             elif path.startswith("/relics"):
                 self._handle_relics(path.removeprefix("/relics"))
             elif path == "/craft":

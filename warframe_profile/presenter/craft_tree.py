@@ -6,71 +6,20 @@ Orchestrates data loading, delegates domain logic to
 :mod:`warframe_profile.report`.
 """
 
-import os
 import sys
 
-from warframe_profile import DATA_DIR
-from warframe_profile.model.craft_model import (
-    add_missing_blueprint_requirement,
-    build_items_by_un,
-    build_lookup,
-    build_recipes_by_result,
-    build_weapon_chains,
-    categorize,
-    find_items,
-    merge_dicts,
-    postprocess_craft_plan,
-    resolve_tree,
-    weapon_name,
-)
-from warframe_profile.model.inventory import (
-    ExportDB,
-    build_mastered_set,
-    build_owned,
-    load_inventory_with_fallback,
-)
-from warframe_profile.model.utils import normalize_path
+from warframe_profile.model.craft_model import categorize, merge_dicts
+from warframe_profile.model.data import Inventory, ItemData
+from warframe_profile.model.inventory import load_data
 from warframe_profile.view.report import (
     print_craft_summary,
     print_craft_tree,
 )
 
 
-def _load_export_db(items_cache: str) -> tuple:
-    """Load the export DB and build item/recipe/name indices."""
-    xdb = ExportDB(items_cache)
-    xdb.load()
-    loc_dict = xdb.locale
-    raw = xdb.raw
-    items_by_un = build_items_by_un(raw)
-    recipes_by_result = build_recipes_by_result(raw)
-    by_name = build_lookup(items_by_un, loc_dict)
-    return loc_dict, raw, items_by_un, recipes_by_result, by_name
-
-
-def _load_inventory(inv_path: str, refresh: bool, raw: dict) -> tuple[dict, dict]:
-    """Load inventory and return ``(owned, inv)``."""
-    inv, _account_id = load_inventory_with_fallback(inv_path, refresh=refresh)
-    if refresh:
-        print(f"  Saved to {inv_path}", file=sys.stderr)
-    return build_owned(inv, raw.get("recipes", {})), inv
-
-
-def _run_weapon_chain_mode(
-    items_by_un: dict,
-    recipes_by_result: dict,
-    owned: dict,
-    loc_dict: dict,
-    mastered: set[str],
-) -> None:
+def _run_weapon_chain_mode(item_data: ItemData, inventory: Inventory) -> None:
     """Build and display weapon upgrade chains for unowned final weapons."""
-    chains, all_req, all_craft, shown = build_weapon_chains(
-        items_by_un,
-        recipes_by_result,
-        owned,
-        loc_dict,
-        mastered=mastered,
-    )
+    chains, all_req, all_craft, shown = inventory.weapon_chains
     if not chains:
         print("No weapon chains found in your progression data.")
         return
@@ -83,20 +32,15 @@ def _run_weapon_chain_mode(
 
     for chain in chains:
         final_un = chain[-1]
-        final_norm = normalize_path(final_un)
-        if owned.get(final_norm, 0) > 0:
+        if inventory.is_owned(final_un):
             continue
-        if final_norm in mastered:
-            continue
-        names = [weapon_name(u, items_by_un, loc_dict) for u in chain]
+        names = [item_data.weapon_name(un) for un in chain]
         header = " \u2192 ".join(names)
         print(f"  {header}")
         box = "\u2550"
         print(f"  {box * len(header)}")
         print()
-        print_craft_tree(
-            final_un, 1, items_by_un, owned, recipes_by_result, loc_dict, depth=0, max_depth=5
-        )
+        print_craft_tree(item_data.craft_tree(final_un, 1, inventory, max_depth=5))
         print()
 
     if shown == 0:
@@ -110,13 +54,13 @@ def _run_weapon_chain_mode(
 
 def _select_matching_item(
     query: str,
-    by_name: dict,
+    item_data: ItemData,
     interactive: bool,
     select: int | None,
     qi: int,
 ) -> dict | None:
     """Search for *query* and interactively or automatically pick one match."""
-    matches = find_items(query, by_name)
+    matches = item_data.find(query)
     if not matches:
         print(f"No items found matching '{query}'")
         return None
@@ -145,10 +89,8 @@ def _select_matching_item(
 def _process_item(
     item_un: str,
     item_name: str,
-    items_by_un: dict,
-    owned: dict,
-    recipes_by_result: dict,
-    loc_dict: dict,
+    item_data: ItemData,
+    inventory: Inventory,
     max_depth: int,
 ) -> tuple[dict, dict]:
     """Print one item's crafting tree and return its (requirements, craftables)."""
@@ -158,16 +100,11 @@ def _process_item(
     print("=" * 72)
     print("\n\u2500\u2500 Crafting Tree \u2500\u2500")
 
-    print_craft_tree(
-        item_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )
+    print_craft_tree(item_data.craft_tree(item_un, 1, inventory, max_depth=max_depth))
     print()
 
-    req, craft = resolve_tree(
-        item_un, 1, items_by_un, owned, recipes_by_result, loc_dict, max_depth=max_depth
-    )
-
-    add_missing_blueprint_requirement(item_un, item_name, req, owned, recipes_by_result)
+    req, craft = item_data.resolve_tree(item_un, 1, inventory, max_depth=max_depth)
+    item_data.add_missing_blueprint(item_un, item_name, req, inventory)
 
     return req, craft
 
@@ -175,20 +112,11 @@ def _process_item(
 def _aggregate_and_print(
     all_requirements: dict,
     all_craftables: dict,
-    recipes_by_result: dict,
-    items_by_un: dict,
-    owned: dict,
-    loc_dict: dict,
+    item_data: ItemData,
+    inventory: Inventory,
 ) -> None:
     """Decompose raw materials, preserve blueprints, and print the summary."""
-    all_requirements = postprocess_craft_plan(
-        all_requirements,
-        all_craftables,
-        owned,
-        items_by_un,
-        recipes_by_result,
-        loc_dict,
-    )
+    all_requirements = item_data.finish_plan(all_requirements, all_craftables, inventory)
 
     if not all_requirements:
         return
@@ -204,14 +132,15 @@ def _aggregate_and_print(
 def main(args) -> None:
     """Entry point for the crafting-tree browser sub-command."""
     print("Loading...", file=sys.stderr)
-    loc_dict, raw, items_by_un, recipes_by_result, by_name = _load_export_db(args.items_cache)
-
-    inv_path = args.inventory or os.path.join(DATA_DIR, "inventory.json")
-    owned, inv = _load_inventory(inv_path, args.refresh, raw)
+    item_data, inventory, _account_id = load_data(
+        args.items_cache,
+        args.refresh_items,
+        args.inventory,
+        args.refresh,
+    )
 
     if args.weapon_chain:
-        mastered = {normalize_path(p) for p in build_mastered_set(inv)}
-        _run_weapon_chain_mode(items_by_un, recipes_by_result, owned, loc_dict, mastered)
+        _run_weapon_chain_mode(item_data, inventory)
         return
 
     queries = list(args.items)
@@ -228,21 +157,17 @@ def main(args) -> None:
     all_craftables: dict[str, dict] = {}
 
     for qi, query in enumerate(queries):
-        sel = _select_matching_item(query, by_name, args.interactive, args.select, qi)
+        sel = _select_matching_item(query, item_data, args.interactive, args.select, qi)
         if sel is None:
             continue
         req, craft = _process_item(
             sel["uniqueName"],
             sel["_resolved_name"],
-            items_by_un,
-            owned,
-            recipes_by_result,
-            loc_dict,
+            item_data,
+            inventory,
             args.depth,
         )
         merge_dicts(all_requirements, req, "quantity")
         merge_dicts(all_craftables, craft, "quantity")
 
-    _aggregate_and_print(
-        all_requirements, all_craftables, recipes_by_result, items_by_un, owned, loc_dict
-    )
+    _aggregate_and_print(all_requirements, all_craftables, item_data, inventory)
