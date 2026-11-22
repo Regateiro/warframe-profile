@@ -104,7 +104,7 @@ def _process_item(
     print()
 
     req, craft = item_data.resolve_tree(item_un, 1, inventory, max_depth=max_depth)
-    item_data.add_missing_blueprint(item_un, item_name, req, inventory)
+    item_data.add_blueprint(item_un, item_name, req, inventory)
 
     return req, craft
 

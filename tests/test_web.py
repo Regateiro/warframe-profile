@@ -28,7 +28,7 @@ from warframe_profile.view.web.templates import (
     render_craft_result,
     render_ducats,
     render_home,
-    render_mastery_owned_blueprints,
+    render_mastery_missing_parts,
     render_mastery_ready,
     render_primes,
     render_relics_needed,
@@ -261,7 +261,7 @@ def test_render_ducats_shows_empty_state():
     assert 'class="tab-bar"' not in page
 
 
-def _mastery_report(ready_rows=None, blueprint_rows=None) -> MasteryReport:
+def _mastery_report(ready_rows=None) -> MasteryReport:
     """Minimal mastery report for subtab rendering tests."""
     return MasteryReport(
         total=10,
@@ -280,16 +280,10 @@ def _mastery_report(ready_rows=None, blueprint_rows=None) -> MasteryReport:
                 link_craft=True,
             ),
             MasterySection(
-                header="OWNED BLUEPRINTS",
-                desc="Blueprint owned",
-                rows=blueprint_rows or [],
+                header="MISSING PARTS",
+                desc="Missing blueprints or materials",
                 group_by_tier=False,
                 link_craft=True,
-            ),
-            MasterySection(
-                header="MISSING BLUEPRINTS",
-                desc="Not owned",
-                group_by_tier=False,
             ),
         ],
         remaining=6,
@@ -309,7 +303,7 @@ def test_render_mastery_ready_lists_craftable_items():
 
     assert "Riot-848" in page
     assert 'href="/craft?q=Riot-848"' in page
-    assert "/mastery/owned-blueprints" in page
+    assert "/mastery/missing-parts" in page
     assert 'class="active">Ready to Build' in page
     assert "Nothing is ready to build" not in page
 
@@ -318,7 +312,7 @@ def test_render_mastery_ready_shows_empty_state():
     page = render_mastery_ready(_mastery_report())
 
     assert "Nothing is ready to build" in page
-    assert "/mastery/owned-blueprints" in page
+    assert "/mastery/missing-parts" in page
 
 
 def test_ducats_rejects_removed_subpaths():
@@ -434,14 +428,31 @@ def test_render_primes_groups_by_relic_age_and_filters_drops():
     assert 'class="active">Relic Age' in page
     assert "<th>Type</th>" in page
     assert "<h3>Meso</h3>" not in page
+    assert "No owned relic drops" not in page
     lith = page[page.index("<h3>Lith</h3>") : page.index("<h3>Neo</h3>")]
     assert "Lith S1 x1" in lith
     assert "Axi A5" not in lith
-    axi = page[page.index("<h3>Axi</h3>") : page.index("<h3>No owned relic drops</h3>")]
+    assert "Lato Prime Barrel" in lith
+    axi_start = page.index("<h3>Axi</h3>")
+    unknown = page.find("<h3>Unknown age</h3>")
+    axi = page[axi_start : unknown if unknown != -1 else len(page)]
     assert "Axi A5 x2" in axi
     assert "Lith S1" not in axi
-    no_relic = page[page.index("<h3>No owned relic drops</h3>") :]
-    assert "Lato Prime Barrel" in no_relic
+    assert "Lato Prime Barrel" in axi
+
+
+def test_render_primes_grouped_without_any_owned_relics_shows_single_table():
+    needed = [
+        _needed_part("Ash Prime Chassis", "Ash Prime", "Warframes"),
+        _needed_part("Orthos Prime Blade", "Orthos Prime", "Melee"),
+    ]
+
+    page = render_primes(needed, "age")
+
+    assert "No owned relic drops" not in page
+    assert "<h3>" not in page
+    assert "Ash Prime Chassis" in page
+    assert "Orthos Prime Blade" in page
 
 
 def test_render_primes_groups_by_rarity_and_filters_drops():
@@ -467,23 +478,28 @@ def test_render_primes_groups_by_rarity_and_filters_drops():
             "Secondary",
             drops=[("Meso M1", 1, "Meso", "")],
         ),
+        _needed_part("Boltor Prime Stock", "Boltor Prime", "Primary"),
     ]
 
     page = render_primes(needed, "rarity")
 
     assert 'class="active">Rarity' in page
+    assert "No owned relic drops" not in page
     assert page.index("<h3>Common</h3>") < page.index("<h3>Uncommon</h3>")
     assert page.index("<h3>Uncommon</h3>") < page.index("<h3>Rare</h3>")
     assert page.index("<h3>Rare</h3>") < page.index("<h3>Unknown rarity</h3>")
     common = page[page.index("<h3>Common</h3>") : page.index("<h3>Uncommon</h3>")]
     assert "Lith S1 x1" in common
     assert "Axi A5" not in common
+    assert "Boltor Prime Stock" in common
     rare = page[page.index("<h3>Rare</h3>") : page.index("<h3>Unknown rarity</h3>")]
     assert "Axi A5 x2" in rare
     assert "Lith S1" not in rare
+    assert "Boltor Prime Stock" in rare
     unknown = page[page.index("<h3>Unknown rarity</h3>") :]
     assert "Lato Prime Barrel" in unknown
     assert "Meso M1 x1" in unknown
+    assert "Boltor Prime Stock" in unknown
 
 
 def test_render_primes_shows_empty_state():
@@ -610,10 +626,17 @@ def test_mastery_rejects_legacy_paths(monkeypatch):
     handler = _bare_handler(web_server)
     handler._html = lambda code, page: codes.append(code)
 
-    for path in ("/in-progress", "/blueprint-ready", "/never-touched", "/unknown"):
+    for path in (
+        "/in-progress",
+        "/blueprint-ready",
+        "/never-touched",
+        "/owned-blueprints",
+        "/missing-blueprints",
+        "/unknown",
+    ):
         web_server.WarframeHandler._handle_mastery(handler, path)
 
-    assert codes == [404, 404, 404, 404]
+    assert codes == [404, 404, 404, 404, 404, 404]
 
 
 def test_render_cleanup_rebuy_escapes_equipment_names():
@@ -630,14 +653,14 @@ def test_render_cleanup_rebuy_escapes_equipment_names():
     assert "&lt;b&gt;Braton&lt;/b&gt;" in page
 
 
-def test_render_mastery_links_blueprint_rows_to_craft():
-    blueprint = MasteryRow(
+def test_render_mastery_missing_parts_links_rows_to_craft():
+    owned_blueprint = MasteryRow(
         name="Silva & Aegis Prime",
         category="Melee",
         mr=14,
         source="Market",
     )
-    other = MasteryRow(name="Lato Prime", category="Secondary", mr=14, source="Void")
+    missing_blueprint = MasteryRow(name="Lato Prime", category="Secondary", mr=14, source="Void")
     report = MasteryReport(
         total=2,
         mastered=0,
@@ -654,27 +677,22 @@ def test_render_mastery_links_blueprint_rows_to_craft():
                 link_craft=True,
             ),
             MasterySection(
-                header="OWNED BLUEPRINTS",
-                desc="Blueprint owned",
-                rows=[blueprint],
+                header="MISSING PARTS",
+                desc="Missing blueprints or materials",
+                rows=[owned_blueprint, missing_blueprint],
                 group_by_tier=False,
                 link_craft=True,
-            ),
-            MasterySection(
-                header="MISSING BLUEPRINTS",
-                desc="Not owned",
-                rows=[other],
-                group_by_tier=False,
             ),
         ],
     )
 
-    page = render_mastery_owned_blueprints(report)
+    page = render_mastery_missing_parts(report)
 
     assert 'href="/craft?q=Silva+%26+Aegis+Prime"' in page
     assert "Silva &amp; Aegis Prime" in page
-    assert 'href="/craft?q=Lato+Prime"' not in page
-    assert "/mastery/missing-blueprints" in page
+    assert 'href="/craft?q=Lato+Prime"' in page
+    assert 'class="active">Missing Parts' in page
+    assert "/mastery/missing-parts" in page
 
 
 def test_render_craft_result_opens_exact_match():

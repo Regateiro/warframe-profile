@@ -3,35 +3,53 @@
 
 Downloads two data sources and merges them into a single file:
 
-1. **DE public export** (from ``browse.wf``) — warframes, weapons,
-   resources, recipes, and the language dictionary.
+1. **DE public export** (from DE's official ``origin``/``content`` servers) —
+   warframes, weapons, resources, recipes, and related item categories.
 2. **WFCD items** (from ``github.com/WFCD/warframe-items``) —
    supplements with fields like ``isPrime``, ``marketCost``,
    ``bpCost``, and tradable component info.
 
 The merged result is saved to ``data/export_db.json``.
 
+The official export is discovered through the language index
+(``PublicExport/index_en.txt.lzma``), which points at content-addressed
+manifests on ``content.warframe.com``.  This avoids depending on third-party
+mirrors that can lag behind DE's releases.
+
 Merge algorithm (see :func:`merge`):
     1. Walk each DE category dict, resolve language keys.
     2. Enrich each item with WFCD fields (isPrime, category, etc.).
     3. Strip bulky drop data from components.
-    4. Add WFCD-only items that are Prime-related or have market costs.
+    4. Add WFCD-only items (mods, relics, etc.) that DE does not export.
+
+The official export already contains plain display names, so no separate
+locale dictionary is merged.
 """
 
 import json
+import lzma
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TypeVar
 
 from warframe_profile import DATA_DIR
 from warframe_profile.model.inventory import load_inventory_with_fallback
 from warframe_profile.model.utils import atomic_write_json
 
-#: Base URL for Digital Extremes' public export files.
-DE_BASE = "https://browse.wf/warframe-public-export-plus/"
+#: Official DE index; the manifest names are content-addressed and change
+#: every time DE publishes an update.
+DE_INDEX_BASE = "https://origin.warframe.com/PublicExport/"
+
+#: Official DE manifest host.  Hashed manifest names come from the index.
+DE_CONTENT_BASE = "https://content.warframe.com/PublicExport/Manifest/"
+
+#: Language of the official export to download.
+DE_LANGUAGE = "en"
 
 #: Base URL for WFCD's per-category JSON files (community-maintained item database).
 WFCD_BASE = "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/"
@@ -67,22 +85,22 @@ WFCD_FILES = [
     "Warframes.json",
 ]
 
-#: Mapping of DE export filenames → labels in the combined dict.
+#: Mapping of official DE manifest stems → labels in the combined dict.
+#: The top-level key in each manifest is the same as its stem.
 DE_FILES = {
-    "ExportWarframes.json": "warframes",
-    "ExportWeapons.json": "weapons",
-    "ExportResources.json": "resources",
-    "ExportCustoms.json": "customs",
-    "ExportGear.json": "gear",
-    "ExportSentinels.json": "sentinels",
-    "ExportKeys.json": "keys",
-    "ExportRecipes.json": "recipes",
-    "dict.en.json": "dict",
+    "ExportWarframes": "warframes",
+    "ExportWeapons": "weapons",
+    "ExportResources": "resources",
+    "ExportCustoms": "customs",
+    "ExportGear": "gear",
+    "ExportSentinels": "sentinels",
+    "ExportKeys": "keys",
+    "ExportRecipes": "recipes",
 }
 
-#: Labels for item-only categories in the export (excludes recipes and dict).
+#: Labels for item-only categories in the export (excludes recipes).
 #: Used by :func:`craft_model.build_items_by_un` to iterate item sources.
-DE_ITEM_LABELS = [v for v in DE_FILES.values() if v not in ("recipes", "dict")]
+DE_ITEM_LABELS = [v for v in DE_FILES.values() if v != "recipes"]
 
 #: Fields taken from WFCD items to enrich DE data.
 WFCD_FIELDS = [
@@ -114,24 +132,37 @@ WFCD_FIELDS = [
 MAX_WORKERS = 8
 
 
-def download_json(url: str) -> dict | list:
-    """Download a JSON file from *url* and deserialise it."""
+def download_bytes(url: str) -> bytes:
+    """Download *url* and return the raw response body."""
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0"},
     )
-    # Callers only pass hardcoded DE_BASE/WFCD_BASE URLs, not user input.
+    # Callers only pass hardcoded DE/WFCD URLs, not user input.
     # semgrepignore
     with urllib.request.urlopen(req, timeout=120) as r:
-        data = r.read()
+        return r.read()
+
+
+def download_json(url: str) -> dict | list:
+    """Download a JSON file from *url* and deserialise it."""
+    data = download_bytes(url)
     try:
         return json.loads(data)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON from {url}: {exc}") from exc
 
 
-def download_json_with_retry(url: str, attempts: int = 3, backoff: float = 1.5):
-    """Download *url*, retrying transient failures with a short backoff.
+_T = TypeVar("_T")
+
+
+def _retry_call(
+    operation: Callable[[], _T],
+    url: str,
+    attempts: int = 3,
+    backoff: float = 1.5,
+) -> _T:
+    """Run *operation*, retrying transient download/parse failures.
 
     A single flaky response previously aborted the whole update after it had
     already downloaded most of the data, so retries are worth the extra code.
@@ -139,8 +170,14 @@ def download_json_with_retry(url: str, attempts: int = 3, backoff: float = 1.5):
     last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return download_json(url)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            return operation()
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            lzma.LZMAError,
+        ) as exc:
             last_exc = exc
             if attempt == attempts:
                 break
@@ -152,6 +189,80 @@ def download_json_with_retry(url: str, attempts: int = 3, backoff: float = 1.5):
             time.sleep(delay)
     assert last_exc is not None  # the loop always runs at least once
     raise last_exc
+
+
+def download_json_with_retry(url: str, attempts: int = 3, backoff: float = 1.5) -> dict | list:
+    """Download and decode *url*, retrying transient failures."""
+    return _retry_call(lambda: download_json(url), url, attempts, backoff)
+
+
+def download_de_index(language: str = DE_LANGUAGE) -> dict[str, str]:
+    """Download DE's compressed export index.
+
+    Returns a mapping of manifest filename (e.g. ``ExportWeapons_en.json``) to
+    its content-addressed name (``ExportWeapons_en.json!00_...``).  The hashed
+    name must be appended to :data:`DE_CONTENT_BASE` to fetch the manifest.
+    """
+    url = f"{DE_INDEX_BASE}index_{language}.txt.lzma"
+
+    def parse_index() -> dict[str, str]:
+        raw = download_bytes(url)
+        text = lzma.decompress(raw).decode("utf-8")
+        index: dict[str, str] = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or "!" not in line:
+                continue
+            filename = line.split("!", 1)[0]
+            index[filename] = line
+        return index
+
+    return _retry_call(parse_index, url)
+
+
+def normalize_de_manifest(stem: str, data: dict) -> dict[str, dict]:
+    """Normalise a DE manifest to a ``uniqueName → entry`` dict.
+
+    The rest of the merge pipeline expects a mapping keyed by uniqueName.
+    Official manifests wrap their entries in a top-level key matching the
+    filename stem (``{"ExportWeapons": [...]}``), so convert them here.
+    """
+    entries = data.get(stem, [])
+    return {
+        entry["uniqueName"]: entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("uniqueName"), str)
+        and entry["uniqueName"]
+    }
+
+
+def download_de_export(language: str = DE_LANGUAGE) -> dict:
+    """Download and normalise every configured DE manifest.
+
+    Returns a ``{label: {uniqueName: entry}}`` mapping for the merge pipeline.
+    Official manifests already contain plain display names, so no separate
+    locale dictionary is needed.
+    """
+    index = download_de_index(language)
+    combined: dict = {}
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        future_to_stem = {}
+        for stem in DE_FILES:
+            filename = f"{stem}_{language}.json"
+            manifest = index.get(filename)
+            if not manifest:
+                raise ValueError(f"DE export index is missing {filename}")
+            future = pool.submit(download_json_with_retry, DE_CONTENT_BASE + manifest)
+            future_to_stem[future] = stem
+
+        for future in as_completed(future_to_stem):
+            stem = future_to_stem[future]
+            label = DE_FILES[stem]
+            combined[label] = normalize_de_manifest(stem, future.result())
+            print(f"  {label}: {len(combined[label])} entries", file=sys.stderr)
+    return combined
 
 
 def download_wfcd_items() -> list[dict]:
@@ -368,7 +479,7 @@ def main(args=None) -> None:
     Flow:
         1. Determine output path (default: ``data/export_db.json``).
         2. Optionally remove old cache (``--refresh-items``).
-        3. Download all DE export JSON files from ``browse.wf``.
+        3. Download the official DE export index and its manifests.
         4. Download WFCD items (one JSON file per category) from GitHub.
         5. Merge both sources via :func:`merge`.
         6. Write merged result to disk.
@@ -380,8 +491,6 @@ def main(args=None) -> None:
     * ``--refresh-items`` — remove the old cache before downloading.
     * ``--refresh`` / ``-r`` — also refresh the player inventory after updating.
     """
-    combined: dict = {}
-
     # Determine output path.
     if args is not None and getattr(args, "items_cache", None):
         out_path = args.items_cache
@@ -397,18 +506,9 @@ def main(args=None) -> None:
             except OSError as exc:
                 print(f"warning: could not remove {out_path}: {exc}", file=sys.stderr)
 
-    # Download DE export files concurrently (the update is network-bound).
+    # Download DE export manifests from the official index.
     print(f"Downloading {len(DE_FILES)} DE export files ...", file=sys.stderr)
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        future_to_label = {
-            pool.submit(download_json_with_retry, DE_BASE + fname): label
-            for fname, label in DE_FILES.items()
-        }
-        for future in as_completed(future_to_label):
-            label = future_to_label[future]
-            combined[label] = future.result()
-            count = len(combined[label])
-            print(f"  {label}: {count} entries", file=sys.stderr)
+    combined = download_de_export()
 
     # Download WFCD items.
     print("Downloading WFCD items ...", file=sys.stderr)

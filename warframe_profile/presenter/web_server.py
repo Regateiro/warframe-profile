@@ -39,8 +39,7 @@ from warframe_profile.view.web.templates import (
     render_craft_result,
     render_ducats,
     render_home,
-    render_mastery_missing_blueprints,
-    render_mastery_owned_blueprints,
+    render_mastery_missing_parts,
     render_mastery_owned_items,
     render_mastery_ready,
     render_mods,
@@ -344,15 +343,13 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _handle_mastery(self, subpath: str):
-        """Serve mastery sub-views (owned items, ready, blueprints)."""
+        """Serve mastery sub-views (owned items, ready, missing parts)."""
         report = _require_inventory().mastery_report
 
         if subpath == "/ready":
             self._html(200, render_mastery_ready(report))
-        elif subpath == "/owned-blueprints":
-            self._html(200, render_mastery_owned_blueprints(report))
-        elif subpath == "/missing-blueprints":
-            self._html(200, render_mastery_missing_blueprints(report))
+        elif subpath == "/missing-parts":
+            self._html(200, render_mastery_missing_parts(report))
         elif subpath:
             self._not_found()
         else:
@@ -434,7 +431,7 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             /relics[/...]   → Safe-to-spam relics + needed drops by item type
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
-            /mastery[/...]  → Mastery (owned items / ready to build / blueprints)
+            /mastery[/...]  → Mastery (owned items / ready to build / missing parts)
             /mods           → Missing mods by in-game category
             /cleanup[/...]  → Inventory cleanup (rebuy / sell / excess)
         """

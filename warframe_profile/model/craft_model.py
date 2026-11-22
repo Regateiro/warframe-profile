@@ -51,7 +51,7 @@ __all__ = [
     "CraftNode",
     "CraftPlan",
     "CraftTree",
-    "add_missing_blueprint_requirement",
+    "add_blueprint_requirement",
     "build_items_by_un",
     "build_lookup",
     "build_recipes_by_result",
@@ -82,8 +82,15 @@ class CraftNode:
     name: str
     quantity: int
     owned: int
+    crafting: int = 0
     reusable: bool = False
     children: list[CraftNode] = field(default_factory=list)
+
+    @property
+    def crafting_needed(self) -> int:
+        """Copies in the foundry that cover part of this node's required amount."""
+        available = max(0, self.owned - self.crafting)
+        return min(self.crafting, max(0, self.quantity - available))
 
 
 @dataclass
@@ -182,7 +189,7 @@ def display_name(
         return resolve_name(item.get("name", comp_name), loc_dict) or comp_name
     if comp_name:
         return comp_name
-    return comp_un_lower.split("/")[-1]
+    return un_to_name(comp.get("uniqueName", ""))
 
 
 def _leaf_result(
@@ -229,9 +236,8 @@ def _register_self_craftable(
         recipe_key = recipe.get("_recipeKey", "")
         if recipe_key:
             bp_owned = owned.get(normalize_path(recipe_key), 0)
-            if bp_owned < 1:
-                bp_name = f"{item_name} Blueprint" if item_name else un_to_name(recipe_key)
-                result[recipe_key.lower()] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
+            bp_name = f"{item_name} Blueprint" if item_name else un_to_name(recipe_key)
+            result[recipe_key.lower()] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
     return result, craftables
 
 
@@ -316,6 +322,7 @@ def resolve_tree(
     max_depth: int = 2,
     parent_name: str | None = None,
     tree_parent: CraftTree | CraftNode | None = None,
+    pending: dict | None = None,
 ) -> tuple[dict, dict]:
     """Recursively resolve an item into requirements and an optional view tree.
 
@@ -347,6 +354,26 @@ def resolve_tree(
 
     result: dict = {}
     craftables: dict = {}
+
+    # Show the item's own blueprint in the tree even when it is already owned.
+    # Official recipes list the blueprint separately from the ingredients; if a
+    # legacy recipe includes it in ``components``, that row is rendered below.
+    blueprint_key = recipe.get("_recipeKey", "")
+    if tree_parent is not None and blueprint_key:
+        has_blueprint_component = any(
+            comp.get("uniqueName", "").lower() == blueprint_key.lower() for comp in components
+        )
+        if not has_blueprint_component:
+            blueprint_node = CraftNode(
+                name=f"{item_name} Blueprint",
+                quantity=1,
+                owned=owned.get(normalize_path(blueprint_key), 0),
+                reusable=not consumable,
+            )
+            if isinstance(tree_parent, CraftTree):
+                tree_parent.nodes.append(blueprint_node)
+            else:
+                tree_parent.children.append(blueprint_node)
 
     if depth > 0 and components:
         norm = normalize_path(item_un)
@@ -382,6 +409,7 @@ def resolve_tree(
                 name=display_name(comp, items_by_un, item_name, loc_dict),
                 quantity=comp_count if reusable else max(total, comp_count),
                 owned=comp_owned,
+                crafting=pending.get(normalize_path(comp_un), 0) if pending else 0,
                 reusable=reusable,
             )
             if isinstance(tree_parent, CraftTree):
@@ -401,6 +429,7 @@ def resolve_tree(
                 max_depth,
                 item_name,
                 tree_parent=node,
+                pending=pending,
             )
             _merge_sub_into(result, sub)
             _merge_sub_into(craftables, sub_craft)
@@ -436,9 +465,9 @@ def resolve_tree(
 #
 # 1. compute_crafting_plan — adjusts num_crafts based on owned quantities.
 # 2. decompose_raw_materials — replaces craftable intermediates with their
-#    raw ingredients, and adds blueprint entries for items not yet owned.
+#    raw ingredients, and adds blueprint entries for each craftable.
 # 3. preserve_blueprints — ensures blueprint requirements that were replaced
-#    by raw materials are still shown if not yet owned.
+#    by raw materials are still shown.
 #
 
 
@@ -451,9 +480,9 @@ def decompose_raw_materials(
 ) -> dict:
     """Decompose corrected *craftables* into raw material requirements.
 
-    Blueprint entries for each craftable are also added when the blueprint
-    is not yet owned.  Returns a ``{un_lower: {name, quantity, owned}}``
-    dict of non-craftable ingredients only.
+    Blueprint entries for each craftable are also added, including owned ones,
+    so the summary shows the complete build.  Returns a
+    ``{un_lower: {name, quantity, owned}}`` dict of non-craftable ingredients.
     """
     craftable_keys = set(craftables.keys())
     requirements: dict = {}
@@ -472,7 +501,7 @@ def decompose_raw_materials(
         if bp_key:
             bp_lower = bp_key.lower()
             bp_owned = owned.get(normalize_path(bp_key), 0)
-            if bp_owned < 1 and bp_lower not in requirements:
+            if bp_lower not in requirements:
                 requirements[bp_lower] = {
                     "name": f"{craft_info['name']} Blueprint",
                     "quantity": 1,
@@ -518,35 +547,34 @@ def preserve_blueprints(
     return new_requirements
 
 
-def add_missing_blueprint_requirement(
+def add_blueprint_requirement(
     item_un: str,
     item_name: str,
     requirements: dict,
     owned: dict,
     recipes_by_result: dict,
 ) -> dict:
-    """Add the item's own blueprint to *requirements* when it is not owned.
+    """Add the item's own blueprint to *requirements*, including when owned.
 
-    The crafting summary should always list the blueprint needed to build
-    the requested item, even though the decomposition step only adds
-    blueprints for intermediate craftables.  Shared by the CLI and web
-    views so both report the same requirements.
+    The crafting summary should always list the blueprint needed to build the
+    requested item, even though the decomposition step only adds blueprints for
+    intermediate craftables.  Shared by the CLI and web views so both report
+    the same requirements.
     """
-    if owned.get(normalize_path(item_un), 0) >= 1:
-        return requirements
     recipe = recipes_by_result.get(item_un.lower())
     if not recipe:
         return requirements
     bp_key = recipe.get("_recipeKey", "")
     if not bp_key:
         return requirements
-    bp_owned = owned.get(normalize_path(bp_key), 0)
-    if bp_owned < 1:
-        requirements[bp_key.lower()] = {
-            "name": f"{item_name} Blueprint",
-            "quantity": 1,
-            "owned": bp_owned,
-        }
+    bp_lower = bp_key.lower()
+    if bp_lower in requirements:
+        return requirements
+    requirements[bp_lower] = {
+        "name": f"{item_name} Blueprint",
+        "quantity": 1,
+        "owned": owned.get(normalize_path(bp_key), 0),
+    }
     return requirements
 
 

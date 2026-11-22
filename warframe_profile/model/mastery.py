@@ -455,7 +455,7 @@ def _craft_requirements(
         return None
 
     requirements, craftables = item_data.resolve_tree(un, 1, inventory, max_depth=5)
-    item_data.add_missing_blueprint(un, item.get("name", ""), requirements, inventory)
+    item_data.add_blueprint(un, item.get("name", ""), requirements, inventory)
     return item_data.finish_plan(requirements, craftables, inventory)
 
 
@@ -580,7 +580,7 @@ class MasteryTierGroup:
 
 @dataclass
 class MasterySection:
-    """One report section (unmastered owned, owned blueprints, missing blueprints)."""
+    """One report section (unmastered owned, ready to build, missing parts)."""
 
     header: str
     desc: str
@@ -671,6 +671,10 @@ def build_mastery_report(item_data: ItemData, inventory: Inventory) -> MasteryRe
     remaining = (
         len(ready_to_build) + len(owned_blueprints) + len(missing_blueprints) + len(in_progress)
     )
+    missing_parts = sorted(
+        owned_blueprints + missing_blueprints,
+        key=lambda pair: (pair[1], pair[0].get("name") or ""),
+    )
     sections = [
         MasterySection(
             header="UNMASTERED OWNED ITEMS",
@@ -686,17 +690,11 @@ def build_mastery_report(item_data: ItemData, inventory: Inventory) -> MasteryRe
             link_craft=True,
         ),
         MasterySection(
-            header="OWNED BLUEPRINTS",
-            desc="All blueprints owned — farm materials to build",
-            rows=_mastery_rows(owned_blueprints),
-            group_by_tier=False,
+            header="MISSING PARTS",
+            desc="Missing blueprints or materials — not ready to build",
+            rows=_mastery_rows(missing_parts),
+            tier_groups=_mastery_tier_groups(missing_parts),
             link_craft=True,
-        ),
-        MasterySection(
-            header="MISSING BLUEPRINTS",
-            desc="Not owned — missing blueprint",
-            rows=_mastery_rows(missing_blueprints),
-            tier_groups=_mastery_tier_groups(missing_blueprints),
         ),
     ]
     return MasteryReport(

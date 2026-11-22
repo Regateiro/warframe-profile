@@ -112,8 +112,7 @@ clients that send neither header (e.g. `curl`) are allowed.
 | `/weapon-chains` | Weapon upgrade chains |
 | `/mastery` | Mastery — **Unmastered Owned Items** (default) |
 | `/mastery/ready` | Mastery — Ready to Build |
-| `/mastery/owned-blueprints` | Mastery — Owned Blueprints |
-| `/mastery/missing-blueprints` | Mastery — Missing Blueprints |
+| `/mastery/missing-parts` | Mastery — Missing Parts |
 | `/mods` | Missing mods |
 | `/cleanup` | Cleanup — **Re-Buyable** (default) |
 | `/cleanup/sell` | Cleanup — Prime Variant |
@@ -121,7 +120,8 @@ clients that send neither header (e.g. `curl`) are allowed.
 
 There is no legacy-URL compatibility layer: unsupported subpaths return **404**.
 That includes removed URLs such as `/ducats/sell`, `/relics/safe`,
-`/mastery/in-progress`, and unknown relic category slugs. All links are
+`/mastery/in-progress`, `/mastery/owned-blueprints`,
+`/mastery/missing-blueprints`, and unknown relic category slugs. All links are
 app-internal, so these paths are not needed.
 
 Unexpected server exceptions return a generic 500 page (traceback stays in the
@@ -206,24 +206,26 @@ Static list of tabs and a one-line description of each. No analysis is loaded.
 **Path:** `/primes/age`
 
 - Parts are grouped under **Lith**, **Meso**, **Neo**, and **Axi** headings,
-  followed by `Unknown age` and a final `No owned relic drops` group.
+  with `Unknown age` for drops whose tier is unknown.
 - A part is repeated under every owned-relic age that can drop it. Its
   **Owned Relic Drops** cell is filtered to that age, so the row answers
   “which of my Lith relics can drop this?” rather than repeating unrelated
   relics.
-- Parts that no owned relic can drop appear once under
-  `No owned relic drops`.
+- Parts that no owned relic can drop are included in every age table instead
+  of a separate group; their **Owned Relic Drops** cell is `—`.
+- If no owned relic can drop any missing part, the rows are shown in a single
+  table with no age heading.
 
 ### 5.3 Rarity
 
 **Path:** `/primes/rarity`
 
 - Parts are grouped under **Common**, **Uncommon**, and **Rare** headings,
-  followed by `Unknown rarity` and `No owned relic drops`.
+  with `Unknown rarity` for rewards without a rarity value.
 - A part is repeated under every drop rarity available from the player's
   relics; the **Owned Relic Drops** cell is filtered to that rarity.
-- Parts that no owned relic can drop appear once under
-  `No owned relic drops`.
+- Parts that no owned relic can drop are included in every rarity table
+  instead of a separate group; their **Owned Relic Drops** cell is `—`.
 
 ### Logic notes
 
@@ -319,17 +321,19 @@ For each Prime item and each tradable part:
 Each result is a `<details>` block containing:
 
 1. **Crafting tree** — recursive tree to depth 3.
-   - Component colours: green (enough owned), yellow (some owned), red (none).
-   - Blueprint rows are included; the main blueprint is consumed once.
+   - Component colours: green (enough owned), cyan (a required copy is in the
+     foundry), yellow (some owned), red (none).
+   - Blueprint rows are included even when the blueprint is already owned;
+     the main blueprint is consumed once.
    - Craftable components expand only when not enough copies are owned.
 2. **Crafting List** — intermediate items that must be built, with needed,
    owned, and craft count.
 3. **Raw Materials** — aggregated materials with needed/owned and status.
 4. **Farming List** — materials still short.
 
-The crafting plan is produced by `resolve_tree` → `add_missing_blueprint_requirement`
+The crafting plan is produced by `resolve_tree` → `add_blueprint_requirement`
 → `postprocess_craft_plan`, so intermediate components are decomposed into raw
-materials and any missing blueprints are preserved.
+materials and blueprint entries are preserved.
 
 Mastery rows link to this page with `/craft?q=<item name>`.
 
@@ -371,8 +375,7 @@ Mastery rows link to this page with `/craft?q=<item name>`.
 
 1. Unmastered Owned Items
 2. Ready to Build
-3. Owned Blueprints
-4. Missing Blueprints
+3. Missing Parts
 
 Every table is driven by the **masterable item universe**, not by the Prime
 index.
@@ -411,17 +414,17 @@ The report combines XP history, ownership, and the crafting tree.
 
 - **Ready to Build** — a recipe exists and every blueprint + material in the
   whole tree is owned.
-- **Owned Blueprints** — all required blueprints are owned, but at least one
-  material is missing.
-- **Missing Blueprints** — at least one required blueprint is missing, or the
-  item has no recipe.
+- **Missing Parts** — everything not ready to build. This covers both items
+  with all required blueprints owned but at least one missing material, and
+  items with at least one required blueprint missing (or no recipe).
 
 Modular component items are not evaluated for Ready to Build, because their
 recipe builds the component rather than assembling the finished modular item;
-they are classified by whether their own blueprint is owned.
+they are classified by whether their own blueprint is owned, and appear under
+Missing Parts unless ready to build.
 
 The readiness plan uses `resolve_tree` (depth 5) +
-`add_missing_blueprint_requirement` + `postprocess_craft_plan`, so it includes
+`add_blueprint_requirement` + `postprocess_craft_plan`, so it includes
 component blueprints and decomposes intermediate components into materials.
 
 ### 9.3 Report sections and ordering
@@ -430,8 +433,7 @@ component blueprints and decomposes intermediate components into materials.
 |---|---|---|
 | Unmastered Owned Items | Farming tier groups | Tier, then name |
 | Ready to Build | Flat | Name |
-| Owned Blueprints | Flat | Name |
-| Missing Blueprints | Farming tier groups | Tier, then name |
+| Missing Parts | Farming tier groups | Tier, then name |
 
 Every item row has **Item, Category, MR, Source**.  
 “MR” is the item’s mastery-point contribution, not the required mastery rank.
@@ -441,8 +443,8 @@ Every item row has **Item, Category, MR, Source**.
 
 - The subtab bar is shown first; the progression summary sits **below** it.
 - Summary shows: masterable items mastered, unmastered owned, ready to build,
-  owned blueprints, missing blueprints, remaining, and total MR available.
-- Ready to Build and Owned Blueprints rows link to the Craft tab.
+  missing parts, remaining, and total MR available.
+- Ready to Build and Missing Parts rows link to the Craft tab.
 - Empty states:
   - Ready to Build has a dedicated message.
   - Other empty sections say “No items in this section.”
@@ -553,8 +555,8 @@ These rules affect more than one tab.
   whether XP has been earned.
 - “Ready to Build” means the complete blueprint + material tree is owned; it is
   not limited to Primes.
-- “Owned Blueprints” means all required blueprints are owned but materials are
-  short.
+- “Missing Parts” combines the former Owned Blueprints and Missing Blueprints
+  groups: every item that is not ready to build.
 - An item being crafted is owned (pending result), so it belongs in Unmastered
   Owned Items, not Ready to Build.
 
@@ -564,7 +566,7 @@ These rules affect more than one tab.
   - Ducats: item name, then part name.
   - Primes: Type by category order; Relic Age by Lith → Meso → Neo → Axi;
     Rarity by Common → Uncommon → Rare; item/part within each group. Parts
-    with no owned relic are listed last.
+    with no owned relic appear in every age/rarity table.
   - Relics: needed rows by item/part; categories by the fixed order above.
   - Mastery: tier/name or name as listed in §9.3.
   - Mods: category by missing count; mods by name.
@@ -582,7 +584,7 @@ Open questions for the reviewer:
    view across all relics.
 3. **Mastery readiness depth is 5.** A deeper recipe chain could theoretically
    be misclassified as not ready.
-4. **Items without recipes** always fall into Missing Blueprints, even if they
+4. **Items without recipes** always fall into Missing Parts, even if they
    are acquired through other means (adversaries, drops, vendors).
 5. **Weapon chains are linear.** Only the first successor is followed, and
    cycles are capped at 20 links.
@@ -621,6 +623,6 @@ Open questions for the reviewer:
 - [ ] An unowned masterable item with every blueprint and material appears
       under Ready to Build, and leaves that tab once it is owned or mastered.
 - [ ] Owned 0-XP items appear under Unmastered Owned Items.
-- [ ] Ready-to-build items are excluded from Owned/Missing Blueprints.
+- [ ] Ready-to-build items are excluded from Missing Parts.
 - [ ] Mods excludes Rivens, Focus Ways, and Transmutation mods.
 - [ ] Cleanup subtabs show the documented columns and empty states.

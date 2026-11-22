@@ -23,8 +23,8 @@ Additional highlights:
   the first fetch.
 - **Weapon chain analysis** — traces full crafting upgrade chains (e.g.
   `MK1-Braton → Braton → Braton Prime`) and shows what you need to farm.
-- **Colour-coded output** — green / yellow / red terminal output for crafting
-  tree browser.
+- **Colour-coded output** — green / cyan / yellow / red terminal output for
+  crafting tree browser.
 
 ## Documentation
 
@@ -200,7 +200,7 @@ automatically. To refresh it manually:
 python warframe.py update
 ```
 
-Downloads ~40 JSON files from Digital Extremes' public export and the
+Downloads the official Digital Extremes public export manifests plus the
 WFCD community item database, merging them into
 `export_db.json` in the per-user data directory (see [Data directory](#data-directory)).
 
@@ -240,11 +240,11 @@ In the web UI the **Ducats** tab shows the sell-for-ducats list.
 ### Mastery progression
 
 The web **Mastery** tab is split into **Unmastered Owned Items**, **Ready to
-Build**, **Owned Blueprints**, and **Missing Blueprints** subtabs, with the
-progression summary shown below them. All four are driven by masterable items,
-not just Primes: Ready to Build means every blueprint and material in the
-crafting tree is owned; Owned Blueprints means the blueprints are owned but
-materials are still missing. Owned items with 0 XP count as unmastered owned
+Build**, and **Missing Parts** subtabs, with the progression summary shown
+below them. All three are driven by masterable items, not just Primes: Ready
+to Build means every blueprint and material in the crafting tree is owned;
+Missing Parts covers everything not ready to build, whether a blueprint or
+material is still missing. Owned items with 0 XP count as unmastered owned
 items, and item names link to the Craft tab for their full breakdown.
 
 ### Crafting tree browser
@@ -267,6 +267,8 @@ python warframe.py craft --refresh
 The tree uses colour-coded output:
 
 - <span style="color:green">**Green**</span> — you have enough.
+- <span style="color:cyan">**Cyan**</span> — a required part is still being
+  crafted in the foundry.
 - <span style="color:yellow">**Yellow**</span> — you have some but not enough.
 - <span style="color:red">**Red**</span> — you have none.
 
@@ -289,13 +291,14 @@ Shows two sections:
 
 ## Data sources
 
-- **DE Public Export**: [`https://browse.wf/warframe-public-export-plus/`](https://browse.wf/warframe-public-export-plus/)
+- **DE Public Export**: [`origin.warframe.com/PublicExport/`](https://origin.warframe.com/PublicExport/index_en.txt.lzma) (index) and [`content.warframe.com/PublicExport/Manifest/`](https://content.warframe.com/PublicExport/Manifest/) (manifests)
 - **WFCD Items**: [`https://github.com/WFCD/warframe-items`](https://github.com/WFCD/warframe-items)
 
 The `update` command downloads both sources and merges them into
 `export_db.json` in the per-user data directory.  The merge enriches DE items with fields from
 WFCD (e.g., `isPrime`, `marketCost`, `components` with ducat values)
-and adds WFCD-only Prime items not present in the DE export.
+and adds WFCD-only items not present in the DE export (mods, relics, and
+similar data).
 
 ## Project structure
 

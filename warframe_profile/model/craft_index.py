@@ -65,7 +65,7 @@ def build_items_by_un(db: dict) -> dict:
 
     for item in db.get("items", []):
         # ``_source`` is only set for items that came from a DE item section;
-        # WFCD-only extras are intentionally excluded from the craft index.
+        # WFCD-only extras (mods, relics, etc.) are not craftable targets.
         if not item.get("_source"):
             continue
         un = item.get("uniqueName", "")

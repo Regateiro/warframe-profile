@@ -79,14 +79,13 @@ def _aggregate_chain_requirements(
         bp_key = recipe.get("_recipeKey", "")
         if bp_key:
             bp_owned = inventory.count(bp_key)
-            if bp_owned < 1:
-                names = [item_data.weapon_name(un) for un in chain]
-                bp_name = f"{names[-1]} Blueprint"
-                key = bp_key.lower()
-                if key in all_requirements:
-                    all_requirements[key]["quantity"] = max(all_requirements[key]["quantity"], 1)
-                else:
-                    all_requirements[key] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
+            names = [item_data.weapon_name(un) for un in chain]
+            bp_name = f"{names[-1]} Blueprint"
+            key = bp_key.lower()
+            if key in all_requirements:
+                all_requirements[key]["quantity"] = max(all_requirements[key]["quantity"], 1)
+            else:
+                all_requirements[key] = {"name": bp_name, "quantity": 1, "owned": bp_owned}
 
 
 def build_weapon_chains(

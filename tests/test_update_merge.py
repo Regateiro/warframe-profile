@@ -1,5 +1,7 @@
 """Tests for the ``update`` merge pipeline and download retries."""
 
+import lzma
+
 import pytest
 
 from warframe_profile.scripts import update_export_db as update
@@ -87,6 +89,60 @@ def test_merge_includes_wfcd_only_prime_items():
     )
 
     assert any(item["name"] == "New Prime" for item in merged["items"])
+
+
+def test_download_de_index_parses_compressed_index(monkeypatch):
+    payload = lzma.compress(
+        b"ExportWeapons_en.json!00_weapons\nExportRecipes_en.json!00_recipes\n\n"
+    )
+    monkeypatch.setattr(update, "download_bytes", lambda _url: payload)
+
+    index = update.download_de_index("en")
+
+    assert index == {
+        "ExportWeapons_en.json": "ExportWeapons_en.json!00_weapons",
+        "ExportRecipes_en.json": "ExportRecipes_en.json!00_recipes",
+    }
+
+
+def test_normalize_de_manifest_converts_official_list():
+    normalized = update.normalize_de_manifest(
+        "ExportWeapons",
+        {
+            "ExportWeapons": [
+                {"uniqueName": "/Lotus/Weapons/A", "name": "A"},
+                {"uniqueName": "/Lotus/Weapons/B", "name": "B"},
+            ]
+        },
+    )
+
+    assert normalized == {
+        "/Lotus/Weapons/A": {"uniqueName": "/Lotus/Weapons/A", "name": "A"},
+        "/Lotus/Weapons/B": {"uniqueName": "/Lotus/Weapons/B", "name": "B"},
+    }
+
+
+def test_download_de_export_uses_official_manifests(monkeypatch):
+    index = {f"{stem}_en.json": f"{stem}_en.json!00_hash" for stem in update.DE_FILES}
+    monkeypatch.setattr(update, "download_de_index", lambda _language: index)
+
+    requested: list[str] = []
+
+    def fake_json(url: str):
+        requested.append(url)
+        stem = url.rsplit("/", 1)[-1].split("_en.json", 1)[0]
+        return {stem: [{"uniqueName": f"/{stem}", "name": stem}]}
+
+    monkeypatch.setattr(update, "download_json_with_retry", fake_json)
+
+    combined = update.download_de_export("en")
+
+    assert set(combined) == set(update.DE_FILES.values())
+    assert combined["weapons"] == {
+        "/ExportWeapons": {"uniqueName": "/ExportWeapons", "name": "ExportWeapons"}
+    }
+    assert len(requested) == len(update.DE_FILES)
+    assert all(url.startswith(update.DE_CONTENT_BASE) for url in requested)
 
 
 def test_download_json_with_retry_recovers(monkeypatch):

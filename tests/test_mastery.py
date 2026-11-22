@@ -123,8 +123,7 @@ def test_report_sections_use_new_names_and_order():
     assert [section.header for section in report.sections] == [
         "UNMASTERED OWNED ITEMS",
         "READY TO BUILD",
-        "OWNED BLUEPRINTS",
-        "MISSING BLUEPRINTS",
+        "MISSING PARTS",
     ]
     assert [row.name for row in report.sections[0].rows] == ["Cedo Prime"]
 

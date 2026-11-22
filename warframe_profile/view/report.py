@@ -374,6 +374,7 @@ _COLOR = color_enabled()
 GREEN = "\033[92m" if _COLOR else ""
 RED = "\033[91m" if _COLOR else ""
 YELLOW = "\033[93m" if _COLOR else ""
+CYAN = "\033[96m" if _COLOR else ""
 RESET = "\033[0m" if _COLOR else ""
 
 
@@ -393,7 +394,8 @@ def _print_node(node, prefix: str, is_last: bool) -> None:
     label = f"{node.name} x{node.quantity}"
     if node.reusable:
         label += " (reusable)"
-    color = craft_color_for_owned(node.owned, node.quantity)
+    # Foundry results count as owned for planning, but are not ready yet.
+    color = CYAN if node.crafting_needed else craft_color_for_owned(node.owned, node.quantity)
     print(f"{prefix}{connector}{color}{label}{RESET}")
     for index, child in enumerate(node.children):
         _print_node(child, child_prefix, index == len(node.children) - 1)

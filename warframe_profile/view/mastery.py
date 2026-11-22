@@ -57,8 +57,7 @@ def print_mastery_report(report: MasteryReport) -> None:
     """Print the full mastery progression report."""
     owned_items = report.sections[0]
     ready_to_build = report.sections[1]
-    owned_blueprints = report.sections[2]
-    missing_blueprints = report.sections[3]
+    missing_parts = report.sections[2]
 
     print("=" * 68)
     print("  MASTERY PROGRESSION REPORT")
@@ -67,8 +66,7 @@ def print_mastery_report(report: MasteryReport) -> None:
     print(
         f"  {owned_items.count} unmastered owned"
         f"  {ready_to_build.count} ready to build"
-        f"  {owned_blueprints.count} owned blueprints"
-        f"  {missing_blueprints.count} missing blueprints"
+        f"  {missing_parts.count} missing parts"
         f"  {report.remaining} remaining"
     )
     print(f"  ~{report.total_mr:,} MR available from unmastered items")

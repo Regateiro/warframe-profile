@@ -24,6 +24,7 @@ from warframe_profile.view.report import part_label
 GREEN = "#27ae60"
 RED = "#e74c3c"
 YELLOW = "#f1c40f"
+CYAN = "#22d3ee"
 DIM = "#7f8c8d"
 
 
@@ -64,6 +65,7 @@ _PAGE_STYLES = f"""<style>
   td a {{ color: #58a6ff; text-decoration: none; }}
   td a:hover {{ text-decoration: underline; }}
   .green {{ color: {GREEN}; }} .red {{ color: {RED}; }} .yellow {{ color: {YELLOW}; }}
+  .cyan {{ color: {CYAN}; }}
   .dim {{ color: {DIM}; }}
   summary {{ cursor: pointer; padding: 4px 0; font-weight: 600; color: #58a6ff; }}
   details {{ margin: 4px 0; }}
@@ -287,8 +289,7 @@ def _subtab_bar(subtabs: list[tuple[str, str, str]], active: str) -> str:
 _MASTERY_SUBTABS = [
     ("owned-items", "Unmastered Owned Items", "/mastery"),
     ("ready", "Ready to Build", "/mastery/ready"),
-    ("owned-blueprints", "Owned Blueprints", "/mastery/owned-blueprints"),
-    ("missing-blueprints", "Missing Blueprints", "/mastery/missing-blueprints"),
+    ("missing-parts", "Missing Parts", "/mastery/missing-parts"),
 ]
 
 #: Preferred tab order for needed-drop categories; unknown categories follow
@@ -343,7 +344,7 @@ def render_home() -> str:
   <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
-  <li><strong>Mastery</strong> — Unmastered owned items, ready to build, and blueprint gaps</li>
+  <li><strong>Mastery</strong> — Unmastered owned items, ready to build, and missing parts</li>
   <li><strong>Mods</strong> — Missing mods grouped by in-game category</li>
   <li><strong>Cleanup</strong> — Equipment safe to sell (market-rebuyable or Prime-owned)</li>
 </ul>
@@ -386,7 +387,8 @@ def _node_html(node) -> str:
     label = f"{node.name} x{node.quantity}"
     if node.reusable:
         label += " (reusable)"
-    cls = _craft_color(node.owned, node.quantity)
+    # Foundry results count as owned for planning, but are not ready yet.
+    cls = "cyan" if node.crafting_needed else _craft_color(node.owned, node.quantity)
     parts = [f'<div class="tree-item"><span class="{cls}">{_esc(label)}</span></div>']
     if node.children:
         inner = "".join(_node_html(child) for child in node.children)
@@ -511,17 +513,11 @@ _PRIMES_AGE_ORDER = ("Lith", "Meso", "Neo", "Axi")
 #: Relic drop rarities in display order.
 _PRIMES_RARITY_ORDER = ("Common", "Uncommon", "Rare")
 
-#: Group heading for missing parts that no owned relic can drop.
-_PRIMES_NO_RELIC_LABEL = "No owned relic drops"
 
-
-def _ordered_group_keys(keys, preferred, *, last: str = "") -> list[str]:
-    """Order group *keys* by *preferred*, then alphabetically, with *last* last."""
+def _ordered_group_keys(keys, preferred) -> list[str]:
+    """Order group *keys* by *preferred*, then alphabetically."""
     ordered = [k for k in preferred if k in keys]
     rest = sorted(set(keys) - set(ordered))
-    if last in rest:
-        rest.remove(last)
-        rest.append(last)
     return ordered + rest
 
 
@@ -551,22 +547,32 @@ def _primes_table(rows, *, show_type: bool = False) -> str:
 def _primes_grouped(needed, group_key, order, *, show_type: bool = True) -> str:
     """Group missing parts by a drop attribute, filtered to that group.
 
-    A part is repeated under every age/rarity it can drop at, and shown once
-    under :data:`_PRIMES_NO_RELIC_LABEL` when no owned relic drops it.
+    A part is repeated under every age/rarity it can drop at. Parts that no
+    owned relic can drop are included in every table; their **Owned Relic
+    Drops** cell shows ``—``, so they are never split into a separate table.
     """
     groups: dict[str, list] = defaultdict(list)
+    no_drops = []
     for n in needed:
         buckets: dict[str, list] = defaultdict(list)
         for drop in n.drops:
             buckets[group_key(drop)].append(drop)
         if not buckets:
-            groups[_PRIMES_NO_RELIC_LABEL].append((n, n.drops))
+            no_drops.append(n)
         else:
             for key, drops in buckets.items():
                 groups[key].append((n, drops))
 
+    if no_drops and groups:
+        for key in groups:
+            groups[key].extend((n, n.drops) for n in no_drops)
+    elif no_drops:
+        # No owned relic can drop any missing part, so there are no groups to
+        # attach them to — show them in one table without an extra heading.
+        return _primes_table([(n, n.drops) for n in no_drops], show_type=show_type)
+
     parts = []
-    for key in _ordered_group_keys(groups, order, last=_PRIMES_NO_RELIC_LABEL):
+    for key in _ordered_group_keys(groups, order):
         parts.append(f"<h3>{_esc(key)}</h3>")
         parts.append(_primes_table(groups[key], show_type=show_type))
     return "".join(parts)
@@ -596,7 +602,8 @@ def render_primes(needed, view: str = "type") -> str:
         )
         note = (
             '<p class="dim">Parts appear under every relic age that can drop them; '
-            "each drop list is filtered to that age.</p>"
+            "each drop list is filtered to that age. Parts that no owned relic can "
+            "drop appear in every table with \u2014 in the drops column.</p>"
         )
         title = "Primes \u2014 Relic Age"
     elif view == "rarity":
@@ -607,7 +614,8 @@ def render_primes(needed, view: str = "type") -> str:
         )
         note = (
             '<p class="dim">Parts appear under every drop rarity across your owned '
-            "relics; each drop list is filtered to that rarity.</p>"
+            "relics; each drop list is filtered to that rarity. Parts that no owned "
+            "relic can drop appear in every table with \u2014 in the drops column.</p>"
         )
         title = "Primes \u2014 Rarity"
     else:
@@ -774,7 +782,7 @@ def render_weapon_chains(
 # Mastery
 # ---------------------------------------------------------------------------
 # Mirrors the CLI mastery report, split into subtabs: Unmastered Owned Items
-# (tiered), Ready to Build, Owned Blueprints, and Missing Blueprints (tiered).
+# (tiered), Ready to Build, and Missing Parts (tiered).
 # All lists are derived from masterable items. The summary is shown below the
 # subtab bar.
 #
@@ -807,14 +815,13 @@ def _mastery_table(rows, link_craft: bool = False) -> str:
 
 def _mastery_summary(report) -> str:
     """Render the shared progression summary shown below every subtab."""
-    owned_items, ready_to_build, owned_blueprints, missing_blueprints = report.sections
+    owned_items, ready_to_build, missing_parts = report.sections
     return f"""<h2>Summary</h2>
 <p>{report.mastered:,} / {report.total:,} masterable items mastered
    ({report.percent}%)</p>
 <p>{owned_items.count} unmastered owned
    &middot; {ready_to_build.count} ready to build
-   &middot; {owned_blueprints.count} owned blueprints
-   &middot; {missing_blueprints.count} missing blueprints
+   &middot; {missing_parts.count} missing parts
    &middot; {report.remaining} remaining</p>
 <p>~{report.total_mr:,} MR available from unmastered items</p>"""
 
@@ -871,16 +878,10 @@ def render_mastery_ready(report) -> str:
     return _mastery_page(report, "ready", "Mastery — Ready to Build", body)
 
 
-def render_mastery_owned_blueprints(report) -> str:
-    """Render the Owned Blueprints subtab."""
-    body = f"<h2>Owned Blueprints</h2>{_mastery_section_body(report.sections[2])}"
-    return _mastery_page(report, "owned-blueprints", "Mastery — Owned Blueprints", body)
-
-
-def render_mastery_missing_blueprints(report) -> str:
-    """Render the Missing Blueprints subtab."""
-    body = f"<h2>Missing Blueprints</h2>{_mastery_section_body(report.sections[3])}"
-    return _mastery_page(report, "missing-blueprints", "Mastery — Missing Blueprints", body)
+def render_mastery_missing_parts(report) -> str:
+    """Render the Missing Parts subtab (not ready to build)."""
+    body = f"<h2>Missing Parts</h2>{_mastery_section_body(report.sections[2])}"
+    return _mastery_page(report, "missing-parts", "Mastery — Missing Parts", body)
 
 
 # ---------------------------------------------------------------------------

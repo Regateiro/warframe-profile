@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from warframe_profile.model.craft_model import (
     CraftPlan,
     CraftTree,
-    add_missing_blueprint_requirement,
+    add_blueprint_requirement,
     build_items_by_un,
     build_lookup,
     build_recipes_by_result,
@@ -328,7 +328,7 @@ class ItemData:
             max_depth=max_depth,
             tree_parent=tree,
         )
-        self.add_missing_blueprint(un, name, requirements, inventory)
+        self.add_blueprint(un, name, requirements, inventory)
         requirements = self.finish_plan(requirements, craftables, inventory)
         return CraftPlan(
             name=name,
@@ -356,17 +356,18 @@ class ItemData:
             self.locale,
             max_depth=max_depth,
             tree_parent=tree_parent,
+            pending=inventory.pending,
         )
 
-    def add_missing_blueprint(
+    def add_blueprint(
         self,
         un: str,
         name: str,
         requirements: dict,
         inventory: Inventory,
     ) -> None:
-        """Add a missing blueprint requirement to *requirements* in place."""
-        add_missing_blueprint_requirement(
+        """Add the item's own blueprint requirement to *requirements* in place."""
+        add_blueprint_requirement(
             un,
             name,
             requirements,
@@ -380,7 +381,7 @@ class ItemData:
         craftables: dict,
         inventory: Inventory,
     ) -> dict:
-        """Decompose intermediates and preserve missing blueprints."""
+        """Decompose intermediates and preserve blueprint entries."""
         return postprocess_craft_plan(
             requirements,
             craftables,
