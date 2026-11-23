@@ -1,7 +1,5 @@
 """Tests for mastery classification and report sections."""
 
-from types import SimpleNamespace
-
 from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.model.mastery import analyze_mastery, build_mastery_report
 
@@ -40,7 +38,7 @@ def _db(recipes: dict | None = None, items: list[dict] | None = None) -> ItemDat
     recipes = recipes or {}
     items = items or [_ITEM]
     raw = {"items": items, "recipes": recipes, "dict": {}}
-    return ItemData(SimpleNamespace(items=items, raw=raw, recipes=recipes, locale={}))
+    return ItemData.from_raw(raw)
 
 
 def _analyze(inventory: dict, recipes: dict | None = None, items: list[dict] | None = None):

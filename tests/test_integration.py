@@ -73,6 +73,7 @@ def _serve():
 def test_web_routes_render_end_to_end():
     server, thread = _serve()
     host, port = server.server_address[:2]
+    assert web_server._cache.inventory is not None
     needed = web_server._cache.inventory.needed_drops
     from warframe_profile.view.web.templates import relic_category_tabs
 

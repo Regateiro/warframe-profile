@@ -1,7 +1,5 @@
 """Tests for relic reward-name matching and needed drops."""
 
-from types import SimpleNamespace
-
 from warframe_profile.model.analysis import (
     build_needed_drops,
     build_relics_map,
@@ -54,8 +52,7 @@ def test_weapon_part_reward_has_no_blueprint_suffix():
 
 def _state(items: list[dict], inventory: dict, recipes: dict | None = None):
     raw = {"items": items, "recipes": recipes or {}, "dict": {}}
-    db = SimpleNamespace(items=items, recipes=raw["recipes"], locale={}, raw=raw)
-    item_data = ItemData(db)
+    item_data = ItemData.from_raw(raw)
     return item_data, Inventory(inventory, item_data)
 
 

@@ -321,7 +321,7 @@ def test_ducats_rejects_removed_subpaths():
 
     codes = []
     handler = _bare_handler(web_server)
-    handler._html = lambda code, page: codes.append(code)
+    handler._html = lambda code, html: codes.append(code)
 
     web_server.WarframeHandler._handle_ducats(handler, "/buildable")
     web_server.WarframeHandler._handle_ducats(handler, "/sell")
@@ -620,7 +620,7 @@ def test_relics_route_accepts_overviews_and_rejects_unsupported_paths(monkeypatc
 
     calls = []
     handler = _bare_handler(web_server)
-    handler._html = lambda code, page: calls.append((code, page))
+    handler._html = lambda code, html: calls.append((code, html))
 
     web_server.WarframeHandler._handle_relics(handler, "")
     web_server.WarframeHandler._handle_relics(handler, "/age")
@@ -653,7 +653,7 @@ def test_removed_primes_routes_return_404():
 
     calls = []
     handler = _bare_handler(web_server)
-    handler._html = lambda code, page: calls.append(code)
+    handler._html = lambda code, html: calls.append(code)
     for path in ("/primes", "/primes/age", "/primes/rarity"):
         handler.path = path
         web_server.WarframeHandler.do_GET(handler)
@@ -709,7 +709,7 @@ def test_mastery_rejects_legacy_paths(monkeypatch):
 
     codes = []
     handler = _bare_handler(web_server)
-    handler._html = lambda code, page: codes.append(code)
+    handler._html = lambda code, html: codes.append(code)
 
     for path in (
         "/in-progress",
@@ -787,8 +787,7 @@ def test_render_craft_result_opens_exact_match():
         "category": "Secondary",
     }
     raw = {"items": [item], "recipes": {}, "dict": {}}
-    db = SimpleNamespace(items=[item], recipes={}, locale={}, raw=raw)
-    item_data = ItemData(db)
+    item_data = ItemData.from_raw(raw)
     inventory = Inventory({}, item_data)
 
     plan = item_data.craft_plan(item["uniqueName"], inventory)

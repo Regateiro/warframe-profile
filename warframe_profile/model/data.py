@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from functools import cache, cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from warframe_profile.model.craft_model import (
     CraftPlan,
@@ -123,11 +123,54 @@ def _compute_owned(raw: dict, pending: dict[str, int]) -> dict[str, int]:
     return dict(owned)
 
 
+class _ItemDatabase(Protocol):
+    """Structural interface required by :class:`ItemData`."""
+
+    @property
+    def items(self) -> list[dict]: ...
+
+    @property
+    def recipes(self) -> dict: ...
+
+    @property
+    def locale(self) -> dict: ...
+
+    @property
+    def raw(self) -> dict: ...
+
+
+class _RawItemDatabase:
+    """Minimal in-memory database used by :meth:`ItemData.from_raw`."""
+
+    def __init__(self, raw: dict) -> None:
+        self._data = raw
+
+    @property
+    def items(self) -> list[dict]:
+        """The merged item list."""
+        return self._data.get("items", [])
+
+    @property
+    def recipes(self) -> dict:
+        """Recipes keyed by recipe uniqueName."""
+        return self._data.get("recipes", {})
+
+    @property
+    def locale(self) -> dict:
+        """Localisation dictionary."""
+        return self._data.get("dict", {})
+
+    @property
+    def raw(self) -> dict:
+        """The full raw mapping."""
+        return self._data
+
+
 class ItemData:
     """Read-only access to the merged item database and derived indices."""
 
-    def __init__(self, db: ExportDB) -> None:
-        """Wrap an already-loaded :class:`ExportDB`."""
+    def __init__(self, db: _ItemDatabase) -> None:
+        """Wrap an already-loaded export database."""
         self._db = db
 
     @classmethod
@@ -136,6 +179,11 @@ class ItemData:
         db = ExportDB(path)
         db.load(refresh=refresh)
         return cls(db)
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> ItemData:
+        """Wrap an in-memory export mapping (useful for tests and tooling)."""
+        return cls(_RawItemDatabase(raw))
 
     # ------------------------------------------------------------------
     # Raw database views

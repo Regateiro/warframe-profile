@@ -1,7 +1,5 @@
 """Tests for weapon upgrade-chain discovery and rendering."""
 
-from types import SimpleNamespace
-
 from warframe_profile.model.craft_model import build_weapon_chains
 from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.view.web.templates import render_weapon_chains
@@ -35,8 +33,7 @@ def _state(inventory: dict | None = None):
         }
     }
     raw = {"items": items, "recipes": recipes, "dict": {}}
-    db = SimpleNamespace(items=items, recipes=recipes, locale={}, raw=raw)
-    item_data = ItemData(db)
+    item_data = ItemData.from_raw(raw)
     return item_data, Inventory(inventory or {}, item_data)
 
 

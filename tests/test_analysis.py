@@ -1,7 +1,5 @@
 """Tests for Prime-map indexing and the core ducat analysis."""
 
-from types import SimpleNamespace
-
 from warframe_profile.model.analysis import analyze, build_prime_map
 from warframe_profile.model.data import Inventory, ItemData
 
@@ -44,8 +42,7 @@ def _prime_map() -> dict:
 
 def _analyze(items: list[dict], inventory: dict, recipes: dict | None = None):
     raw = {"items": items, "recipes": recipes or {}, "dict": {}}
-    db = SimpleNamespace(items=items, recipes=raw["recipes"], locale={}, raw=raw)
-    item_data = ItemData(db)
+    item_data = ItemData.from_raw(raw)
     return analyze(item_data, Inventory(inventory, item_data))
 
 

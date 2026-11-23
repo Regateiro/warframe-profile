@@ -1,7 +1,5 @@
 """Tests for crafting-plan blueprint visibility and foundry-aware colours."""
 
-from types import SimpleNamespace
-
 from warframe_profile.model.craft_model import CraftNode
 from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.view import report
@@ -63,7 +61,7 @@ def _item_data(*, with_component: bool = False) -> ItemData:
         }
 
     raw = {"items": items, "recipes": recipes, "dict": {}}
-    return ItemData(SimpleNamespace(items=items, recipes=recipes, locale={}, raw=raw))
+    return ItemData.from_raw(raw)
 
 
 def test_craft_plan_shows_owned_root_blueprint():

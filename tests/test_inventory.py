@@ -1,7 +1,5 @@
 """Tests for the central Inventory model and credential extraction."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from warframe_profile.model.data import Inventory, ItemData
@@ -20,8 +18,7 @@ _ACCOUNT = "0123456789abcdef01234567"
 def _inventory(raw: dict | None = None, recipes: dict | None = None) -> Inventory:
     recipes = recipes or {}
     payload = {"items": [], "recipes": recipes, "dict": {}}
-    db = SimpleNamespace(items=[], recipes=recipes, locale={}, raw=payload)
-    return Inventory(raw or {}, ItemData(db))
+    return Inventory(raw or {}, ItemData.from_raw(payload))
 
 
 def test_inventory_counts_every_section():

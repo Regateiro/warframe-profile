@@ -1,5 +1,5 @@
 {
-  "include": ["warframe_profile"],
+  "include": ["warframe_profile", "tests"],
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "reportMissingTypeStubs": false
