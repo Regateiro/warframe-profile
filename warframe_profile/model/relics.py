@@ -294,6 +294,37 @@ class NeededPart:
     drops: list[tuple[str, int, str, str]]
 
 
+def _normalized_rarities(rewards: list[dict]) -> list[str]:
+    """Return Common/Uncommon/Rare labels for one relic's rewards.
+
+    Some WFCD exports label every non-rare slot as ``Uncommon``.  Relic
+    chances always form three groups (3 common, 2 uncommon, 1 rare per
+    refinement), so derive the rarity from the chance multiplicities and fall
+    back to the stored label when chance data is missing.
+    """
+    chances = []
+    for reward in rewards:
+        chance = reward.get("chance")
+        if not isinstance(chance, (int, float, str)):
+            return [reward.get("rarity") or "" for reward in rewards]
+        try:
+            chances.append(round(float(chance), 2))
+        except (TypeError, ValueError):
+            return [reward.get("rarity") or "" for reward in rewards]
+
+    counts = defaultdict(int)
+    for chance in chances:
+        counts[chance] += 1
+    if len(counts) < 2 or max(counts.values()) < 2:
+        return [reward.get("rarity") or "" for reward in rewards]
+
+    by_chance = {
+        chance: "Common" if count >= 3 else "Uncommon" if count == 2 else "Rare"
+        for chance, count in counts.items()
+    }
+    return [by_chance[chance] for chance in chances]
+
+
 def _build_reward_index(
     inventory: Inventory,
     all_relics: list[dict],
@@ -308,9 +339,10 @@ def _build_reward_index(
             continue
         short_name = _shorten_name(relic.get("name", ""))
         tier = _tier_from_un(relic_un)
-        for rw in relic.get("rewards", []):
-            rarity = rw.get("rarity") or ""
-            index[rw["item"]["name"]].append((short_name, relic_count, tier, rarity))
+        rewards = relic.get("rewards", [])
+        rarities = _normalized_rarities(rewards)
+        for reward, rarity in zip(rewards, rarities):
+            index[reward["item"]["name"]].append((short_name, relic_count, tier, rarity))
     return index
 
 

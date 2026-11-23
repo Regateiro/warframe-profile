@@ -87,8 +87,8 @@ clients that send neither header (e.g. `curl`) are allowed.
 ### Shared page shell
 
 - Dark GitHub-style theme.
-- Top navigation: **Home, Ducats, Primes, Relics, Craft, Weapon Chains,
-  Mastery, Mods, Cleanup**, plus the two refresh buttons.
+- Top navigation: **Home, Ducats, Relics, Craft, Weapon Chains, Mastery, Mods,
+  Cleanup**, plus the two refresh buttons.
 - Pages with multiple views use a horizontal subtab bar.
 - Query-string notifications (`notice`, `refresh_error`) render as a dismissible
   toast and are removed from the URL.
@@ -103,10 +103,11 @@ clients that send neither header (e.g. `curl`) are allowed.
 |---|---|
 | `/` | Home |
 | `/ducats` | Ducats — sell list |
-| `/primes` | Primes — missing parts by **Type** (default) |
-| `/primes/age` | Primes — grouped by Relic Age |
-| `/primes/rarity` | Primes — grouped by drop Rarity |
 | `/relics` | Relics — **Safe to Spam** (default) |
+| `/relics/age` | Relics — missing parts grouped by **Relic Age** |
+| `/relics/age/<lith\|meso\|neo\|axi>` | One relic age |
+| `/relics/rarity` | Relics — missing parts grouped by drop **Rarity** |
+| `/relics/rarity/<common\|uncommon\|rare>` | One drop rarity |
 | `/relics/needed/<category-slug>` | Needed drops for one item type |
 | `/craft?q=…` | Craft search / results |
 | `/weapon-chains` | Weapon upgrade chains |
@@ -119,7 +120,7 @@ clients that send neither header (e.g. `curl`) are allowed.
 | `/cleanup/excess` | Cleanup — Excess |
 
 There is no legacy-URL compatibility layer: unsupported subpaths return **404**.
-That includes removed URLs such as `/ducats/sell`, `/relics/safe`,
+That includes removed URLs such as `/primes`, `/ducats/sell`, `/relics/safe`,
 `/mastery/in-progress`, `/mastery/owned-blueprints`,
 `/mastery/missing-blueprints`, and unknown relic category slugs. All links are
 app-internal, so these paths are not needed.
@@ -169,20 +170,18 @@ Static list of tabs and a one-line description of each. No analysis is loaded.
 
 ---
 
-## 5. Primes
+## 5. Relics — Needed Part Overviews
 
-**Default:** Type at `/primes`.  
-**Subtabs:** Type (default) · Relic Age · Rarity.  
+**Subtabs:** By Relic Age · By Rarity, under the Relics tab.  
 **Data:** `NeededPart` list (`build_needed_drops`).
 
 ### Display rules
 
-- Shows every Prime part that is still missing, across all item categories.
-- Every subtab uses the same columns (the Type column is added to the age and
-  rarity tables):
+- These views show only the Prime parts that are still missing.
+- Columns:
   - **Part** — WFCD-style reward name (e.g. `Ash Prime Chassis Blueprint`).
   - **Item** — parent Prime item.
-  - **Type** — parent item category (age/rarity views only).
+  - **Type** — parent item category.
   - **Need** — missing copies.
   - **Duc** — ducats per copy.
   - **Owned Relic Drops** — owned relics that can drop the part, as
@@ -193,54 +192,58 @@ Static list of tabs and a one-line description of each. No analysis is loaded.
 - Empty state: “No Prime parts are missing — you have every part needed for
   the Prime items in your crafting plans.”
 
-### 5.1 Type (default)
+### 5.1 By Relic Age
 
-**Path:** `/primes`
+**Paths:** `/relics/age`, `/relics/age/<lith|meso|neo|axi>`
 
-- Parts are grouped under `<Category>` headings in the Relics tab order
-  (`Warframes → Primary → Secondary → Melee → Archwing → Sentinels →
-  Arch-Gun`, then unknown categories alphabetically).
-
-### 5.2 Relic Age
-
-**Path:** `/primes/age`
-
+- A second-level tab bar provides **All**, **Lith**, **Meso**, **Neo**, and
+  **Axi**; the single-age views filter the table to that age.
 - Parts are grouped under **Lith**, **Meso**, **Neo**, and **Axi** headings,
   with `Unknown age` for drops whose tier is unknown.
 - A part is repeated under every owned-relic age that can drop it. Its
   **Owned Relic Drops** cell is filtered to that age, so the row answers
   “which of my Lith relics can drop this?” rather than repeating unrelated
   relics.
-- Parts that no owned relic can drop are included in every age table instead
-  of a separate group; their **Owned Relic Drops** cell is `—`.
-- If no owned relic can drop any missing part, the rows are shown in a single
-  table with no age heading.
+- Parts that no owned relic can drop are shown in a final
+  `No owned relic drops` group; they are not repeated under every age.
+- Single-age views show only parts with a drop in that age.
 
-### 5.3 Rarity
+### 5.2 By Rarity
 
-**Path:** `/primes/rarity`
+**Paths:** `/relics/rarity`, `/relics/rarity/<common|uncommon|rare>`
 
+- A second-level tab bar provides **All**, **Common**, **Uncommon**, and
+  **Rare**; the single-rarity views filter the table to that rarity.
 - Parts are grouped under **Common**, **Uncommon**, and **Rare** headings,
   with `Unknown rarity` for rewards without a rarity value.
+- The standard **Common / Uncommon / Rare** headings are always rendered, even
+  when a rarity currently has no missing parts; empty groups show “No missing
+  parts in this group.”
 - A part is repeated under every drop rarity available from the player's
   relics; the **Owned Relic Drops** cell is filtered to that rarity.
-- Parts that no owned relic can drop are included in every rarity table
-  instead of a separate group; their **Owned Relic Drops** cell is `—`.
+- Parts that no owned relic can drop are shown in a final
+  `No owned relic drops` group; they are not repeated under every rarity.
+- Single-rarity views show only parts with a drop in that rarity.
 
 ### Logic notes
 
 - This is the same data as the per-category **Relics → Needed Drops** views,
-  presented as one searchable-at-a-glance list.
+  presented as overview subtabs.
 - A part only counts as missing when `missing > 0` and it has a ducat value,
   matching the relic logic (§6.2).
 - Only **owned** relics are listed; the view is a “what can I open now”
   checklist, not a global relic drop table.
-- Drop rarity comes from the relic reward's `rarity` field
-  (`Common` / `Uncommon` / `Rare`).
+- Relic reward rarity is normalized from the reward chances in each relic:
+  the three-slot chance tier is **Common**, the two-slot tier is **Uncommon**,
+  and the single-slot tier is **Rare**. This corrects WFCD exports that label
+  common slots as `Uncommon`; the stored label is used only when chance data is
+  unavailable.
 
 ## 6. Relics
 
 **Default:** Safe to Spam at `/relics`.  
+**Subtabs:** Safe to Spam (default) · By Relic Age · By Rarity · one tab per
+needed item category.  
 **Data:** `RelicInfo` list (`build_relics_map`) and `NeededPart` list
 (`build_needed_drops`).
 
@@ -267,8 +270,8 @@ covered:
 **Table columns:** Relic, Tier, Count, Vaulted.  
 **Empty state:** “No relics are safe to spam yet.”
 
-Subtab bar: **Safe to Spam** first, followed by one tab per item category that
-currently has needed parts.
+Subtab bar: **Safe to Spam** first, then **By Relic Age** and **By Rarity**,
+followed by one tab per item category that currently has needed parts.
 
 ### 6.2 Needed Drops by item type
 
@@ -564,10 +567,11 @@ These rules affect more than one tab.
 
 - Tables are sorted deterministically:
   - Ducats: item name, then part name.
-  - Primes: Type by category order; Relic Age by Lith → Meso → Neo → Axi;
-    Rarity by Common → Uncommon → Rare; item/part within each group. Parts
-    with no owned relic appear in every age/rarity table.
-  - Relics: needed rows by item/part; categories by the fixed order above.
+  - Relics overviews: By Relic Age in Lith → Meso → Neo → Axi order; By
+    Rarity in Common → Uncommon → Rare order; item/part within each group.
+    Parts with no owned relic appear only in the final `No owned relic drops`
+    group of an overview, never in a single age/rarity filter.
+  - Relics categories: needed rows by item/part; categories by the fixed order.
   - Mastery: tier/name or name as listed in §9.3.
   - Mods: category by missing count; mods by name.
   - Cleanup: category/name (re-buyable, prime variant); name (excess).
@@ -612,8 +616,11 @@ Open questions for the reviewer:
       page; failure keeps cached data and shows an error toast.
 - [ ] Refresh Item DB reloads indices and clears derived caches.
 - [ ] Ducats lists only surplus parts with ducats and shows the expected total.
-- [ ] Primes defaults to Type, with Relic Age and Rarity subtabs; age/rarity
-      groups are ordered and their drop lists are filtered to the group.
+- [ ] Relics includes By Relic Age and By Rarity subtabs with All plus
+      Lith/Meso/Neo/Axi and Common/Uncommon/Rare second-level filters.
+- [ ] Rarity always shows Common, and each group's drop list is filtered to
+      that group.
+- [ ] The removed `/primes` URL returns 404 and no Primes nav tab is shown.
 - [ ] A Prime item (or component) in the foundry is not listed as a missing
       part, and its relics can become safe to spam.
 - [ ] Safe-to-Spam is first/default, and needed categories match the fixed order.

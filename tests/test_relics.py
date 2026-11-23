@@ -154,3 +154,36 @@ def test_pending_component_covers_its_own_missing_part():
 
     assert needed == []
     assert relics[0].safe is True
+
+
+def test_relic_rarity_is_derived_from_chance_grouping():
+    items = [
+        _items()[0],
+        {
+            "uniqueName": "/Lotus/Types/Game/Projections/T4VoidProjectionRarityTest",
+            "name": "Axi R1 Intact",
+            "category": "Relics",
+            "rewards": [
+                {
+                    "item": {"name": "Valkyr Prime Chassis Blueprint"},
+                    "chance": 25.33,
+                    "rarity": "Uncommon",
+                },
+                {"item": {"name": "Filler A"}, "chance": 25.33, "rarity": "Uncommon"},
+                {"item": {"name": "Filler B"}, "chance": 25.33, "rarity": "Uncommon"},
+                {"item": {"name": "Filler C"}, "chance": 11, "rarity": "Uncommon"},
+                {"item": {"name": "Filler D"}, "chance": 11, "rarity": "Uncommon"},
+                {"item": {"name": "Filler E"}, "chance": 2, "rarity": "Rare"},
+            ],
+        },
+    ]
+    inventory = {
+        "MiscItems": [
+            {"ItemType": "/Lotus/Types/Game/Projections/T4VoidProjectionRarityTest", "ItemCount": 1}
+        ]
+    }
+    item_data, state = _state(items, inventory)
+
+    needed = build_needed_drops(item_data, state)
+
+    assert needed[0].drops == [("Axi R1", 1, "Axi", "Common")]

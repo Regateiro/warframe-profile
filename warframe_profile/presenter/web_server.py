@@ -31,6 +31,8 @@ from warframe_profile.model.data import Inventory, ItemData
 from warframe_profile.model.errors import InventoryFetchError, WarframeNotRunningError
 from warframe_profile.model.inventory import load_inventory_with_fallback
 from warframe_profile.view.web.templates import (
+    RELIC_AGE_SLUGS,
+    RELIC_RARITY_SLUGS,
     relic_category_tabs,
     render_cleanup_excess,
     render_cleanup_rebuy,
@@ -43,8 +45,9 @@ from warframe_profile.view.web.templates import (
     render_mastery_owned_items,
     render_mastery_ready,
     render_mods,
-    render_primes,
+    render_relics_age,
     render_relics_needed,
+    render_relics_rarity,
     render_relics_safe,
     render_weapon_chains,
 )
@@ -276,24 +279,31 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
             return
         self._html(200, render_ducats(_require_inventory().analysis))
 
-    def _handle_primes(self, subpath: str):
-        """Serve the missing-Prime-parts views (type, relic age, rarity)."""
-        if subpath == "/age":
-            view = "age"
-        elif subpath == "/rarity":
-            view = "rarity"
-        elif subpath:
-            self._not_found()
-            return
-        else:
-            view = "type"
-        self._html(200, render_primes(_require_inventory().needed_drops, view))
-
     def _handle_relics(self, subpath: str):
-        """Serve relic views: Safe to Spam default, then needed item types."""
+        """Serve relic views: Safe, age/rarity overviews, then item types."""
         inventory = _require_inventory()
         if not subpath:
             self._html(200, render_relics_safe(inventory.needed_drops, inventory.relic_info))
+            return
+        if subpath == "/age":
+            self._html(200, render_relics_age(inventory.needed_drops))
+            return
+        if subpath.startswith("/age/"):
+            slug = subpath.removeprefix("/age/")
+            if slug in RELIC_AGE_SLUGS:
+                self._html(200, render_relics_age(inventory.needed_drops, slug))
+            else:
+                self._not_found()
+            return
+        if subpath == "/rarity":
+            self._html(200, render_relics_rarity(inventory.needed_drops))
+            return
+        if subpath.startswith("/rarity/"):
+            slug = subpath.removeprefix("/rarity/")
+            if slug in RELIC_RARITY_SLUGS:
+                self._html(200, render_relics_rarity(inventory.needed_drops, slug))
+            else:
+                self._not_found()
             return
         if subpath.startswith("/needed/"):
             slug = subpath.removeprefix("/needed/")
@@ -425,10 +435,8 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
         Routes:
             /               → Home
             /ducats         → Ducat sell analysis
-            /primes         → Missing Prime parts and owned relic drops
-            /primes/age     → Same list grouped by relic age
-            /primes/rarity  → Same list grouped by drop rarity
-            /relics[/...]   → Safe-to-spam relics + needed drops by item type
+            /relics[/...]   → Safe-to-spam relics, needed parts by age/rarity,
+                              and needed drops by item type
             /craft          → Crafting tree browser (with ?q= search)
             /weapon-chains  → Weapon upgrade chains
             /mastery[/...]  → Mastery (owned items / ready to build / missing parts)
@@ -444,8 +452,6 @@ class WarframeHandler(http.server.BaseHTTPRequestHandler):
                 self._handle_home()
             elif path.startswith("/ducats"):
                 self._handle_ducats(path.removeprefix("/ducats"))
-            elif path.startswith("/primes"):
-                self._handle_primes(path.removeprefix("/primes"))
             elif path.startswith("/relics"):
                 self._handle_relics(path.removeprefix("/relics"))
             elif path == "/craft":

@@ -6,8 +6,8 @@ wrapped in the shared dark-theme page layout (:func:`_page`).
 
 The page layout includes:
     - GitHub-dark inspired CSS theme.
-    - Navigation tabs (Home, Ducats, Primes, Relics, Craft, Weapon Chains,
-      Mastery, Mods, Cleanup).
+    - Navigation tabs (Home, Ducats, Relics, Craft, Weapon Chains, Mastery,
+      Mods, Cleanup).
     - Refresh Inventory button (POSTs to /refresh).
     - Subtab bars for views with multiple sub-sections (relics, mastery,
       cleanup).
@@ -242,7 +242,6 @@ def _page(title: str, content: str, active: str) -> str:
     tabs = [
         ("home", "Home", "/"),
         ("ducats", "Ducats", "/ducats"),
-        ("primes", "Primes", "/primes"),
         ("relics", "Relics", "/relics"),
         ("craft", "Craft", "/craft"),
         ("weapon-chains", "Weapon Chains", "/weapon-chains"),
@@ -311,9 +310,13 @@ def relic_category_slug(category: str) -> str:
 
 
 def relic_category_tabs(needed) -> list[tuple[str, str, str]]:
-    """Return the Relics subtabs: Safe to Spam first, then needed categories."""
+    """Return the Relics subtabs: overviews first, then needed categories."""
     categories = {item.category for item in needed if item.category}
-    tabs = [("safe", "Safe to Spam", "/relics")]
+    tabs = [
+        ("safe", "Safe to Spam", "/relics"),
+        ("age", "By Relic Age", "/relics/age"),
+        ("rarity", "By Rarity", "/relics/rarity"),
+    ]
     for category in _ordered_group_keys(categories, _RELIC_CATEGORY_ORDER):
         slug = relic_category_slug(category)
         tabs.append((slug, category, f"/relics/needed/{slug}"))
@@ -340,8 +343,7 @@ def render_home() -> str:
 <div class="flash">Select a tab above to explore your Warframe profile.</div>
 <ul style="margin-left:20px;line-height:1.8">
   <li><strong>Ducats</strong> — Surplus Prime parts to sell at Baro Ki'Teer</li>
-  <li><strong>Primes</strong> — Missing Prime parts and the relics that can drop them</li>
-  <li><strong>Relics</strong> — Needed prime parts and safe-to-spam relics</li>
+  <li><strong>Relics</strong> — Safe-to-spam relics and missing Prime parts by age or rarity</li>
   <li><strong>Craft</strong> — Look up crafting trees for any item</li>
   <li><strong>Weapon Chains</strong> — Weapon upgrade chains you haven't completed</li>
   <li><strong>Mastery</strong> — Unmastered owned items, ready to build, and missing parts</li>
@@ -494,24 +496,31 @@ def render_ducats(data) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Primes
+# Relics — needed part overviews
 # ---------------------------------------------------------------------------
-# One combined list of every missing Prime part with the owned relics that can
-# drop it. Subtabs regroup the same rows by item type (default), relic age, or
-# drop rarity.
+# These views show only missing Prime parts, grouped by relic age or drop
+# rarity. They are Relics subtabs; the per-category views follow below.
 #
 
-_PRIMES_SUBTABS = [
-    ("type", "Type", "/primes"),
-    ("age", "Relic Age", "/primes/age"),
-    ("rarity", "Rarity", "/primes/rarity"),
-]
-
 #: Relic ages in display order (the DE tier codes mapped by the model).
-_PRIMES_AGE_ORDER = ("Lith", "Meso", "Neo", "Axi")
+_RELIC_AGE_ORDER = ("Lith", "Meso", "Neo", "Axi")
 
 #: Relic drop rarities in display order.
-_PRIMES_RARITY_ORDER = ("Common", "Uncommon", "Rare")
+_RELIC_RARITY_ORDER = ("Common", "Uncommon", "Rare")
+
+#: URL slugs for the second-level overview filters.
+RELIC_AGE_SLUGS = ("lith", "meso", "neo", "axi")
+RELIC_RARITY_SLUGS = ("common", "uncommon", "rare")
+
+#: Final overview group for parts that no owned relic can drop.
+_NO_OWNED_RELIC_DROPS = "No owned relic drops"
+
+
+def _overview_filter_tabs(base: str, slugs: tuple[str, ...]) -> list[tuple[str, str, str]]:
+    """Return ``All`` plus one second-level filter tab per slug."""
+    tabs = [("all", "All", base)]
+    tabs.extend((slug, slug.capitalize(), f"{base}/{slug}") for slug in slugs)
+    return tabs
 
 
 def _ordered_group_keys(keys, preferred) -> list[str]:
@@ -521,14 +530,14 @@ def _ordered_group_keys(keys, preferred) -> list[str]:
     return ordered + rest
 
 
-def _primes_drops_cell(drops) -> str:
+def _needed_drops_cell(drops) -> str:
     """Render the owned-relic drop list for one part."""
     if not drops:
         return '<span class="dim">\u2014</span>'
     return _esc(", ".join(f"{name} x{count}" for name, count, _, _ in drops))
 
 
-def _primes_table(rows, *, show_type: bool = False) -> str:
+def _needed_parts_table(rows, *, show_type: bool = False) -> str:
     """Render a missing-part table from ``(NeededPart, drops)`` rows."""
     type_head = "<th>Type</th>" if show_type else ""
     body = "".join(
@@ -536,7 +545,7 @@ def _primes_table(rows, *, show_type: bool = False) -> str:
         f"{f'<td>{_esc(n.category)}</td>' if show_type else ''}"
         f'<td class="num">x{n.missing}</td>'
         f'<td class="num">{n.ducats or ""}</td>'
-        f"<td>{_primes_drops_cell(drops)}</td></tr>"
+        f"<td>{_needed_drops_cell(drops)}</td></tr>"
         for n, drops in sorted(rows, key=lambda row: (row[0].item_name, row[0].part_type))
     )
     return f"""<table><thead><tr><th>Part</th><th>Item</th>{type_head}<th class='num'>Need</th>
@@ -544,106 +553,157 @@ def _primes_table(rows, *, show_type: bool = False) -> str:
 <tbody>{body}</tbody></table>"""
 
 
-def _primes_grouped(needed, group_key, order, *, show_type: bool = True) -> str:
+def _needed_parts_grouped(
+    needed,
+    group_key,
+    order,
+    *,
+    show_type: bool = True,
+    ensure: tuple[str, ...] = (),
+) -> str:
     """Group missing parts by a drop attribute, filtered to that group.
 
     A part is repeated under every age/rarity it can drop at. Parts that no
-    owned relic can drop are included in every table; their **Owned Relic
-    Drops** cell shows ``—``, so they are never split into a separate table.
+    owned relic can drop are kept in a dedicated final group so they do not
+    pollute every age/rarity filter. Standard groups in *ensure* are always
+    rendered, even when empty.
     """
     groups: dict[str, list] = defaultdict(list)
-    no_drops = []
     for n in needed:
         buckets: dict[str, list] = defaultdict(list)
         for drop in n.drops:
             buckets[group_key(drop)].append(drop)
         if not buckets:
-            no_drops.append(n)
+            groups[_NO_OWNED_RELIC_DROPS].append((n, n.drops))
         else:
             for key, drops in buckets.items():
                 groups[key].append((n, drops))
 
-    if no_drops and groups:
-        for key in groups:
-            groups[key].extend((n, n.drops) for n in no_drops)
-    elif no_drops:
-        # No owned relic can drop any missing part, so there are no groups to
-        # attach them to — show them in one table without an extra heading.
-        return _primes_table([(n, n.drops) for n in no_drops], show_type=show_type)
+    for key in ensure:
+        groups.setdefault(key, [])
+
+    keys = _ordered_group_keys(groups, order)
+    if _NO_OWNED_RELIC_DROPS in keys:
+        keys.remove(_NO_OWNED_RELIC_DROPS)
+        keys.append(_NO_OWNED_RELIC_DROPS)
 
     parts = []
-    for key in _ordered_group_keys(groups, order):
+    for key in keys:
         parts.append(f"<h3>{_esc(key)}</h3>")
-        parts.append(_primes_table(groups[key], show_type=show_type))
+        if groups[key]:
+            parts.append(_needed_parts_table(groups[key], show_type=show_type))
+        else:
+            parts.append('<p class="dim">No missing parts in this group.</p>')
     return "".join(parts)
 
 
-def render_primes(needed, view: str = "type") -> str:
-    """Render the Primes tab, grouped by type, relic age, or drop rarity."""
-    if not needed:
-        return _page(
-            "Primes",
-            '<div class="flash">No Prime parts are missing \u2014 you have every part '
-            "needed for the Prime items in your crafting plans.</div>",
-            "primes",
-        )
-
+def _needed_parts_intro(needed) -> str:
+    """Render the missing-part count line shared by the overview views."""
     with_relics = sum(1 for n in needed if n.drops)
-    intro = (
+    return (
         f"<p>{len(needed)} missing Prime part{'s' if len(needed) != 1 else ''}"
         f" &middot; {with_relics} can drop from an owned relic.</p>"
     )
 
-    if view == "age":
-        body = _primes_grouped(
-            needed,
-            lambda drop: drop[2] or "Unknown age",
-            _PRIMES_AGE_ORDER,
+
+def _needed_parts_for_group(needed, group_key, group: str, *, show_type: bool = True) -> str:
+    """Render one selected age/rarity group."""
+    rows = []
+    for n in needed:
+        drops = [drop for drop in n.drops if group_key(drop) == group]
+        if drops:
+            rows.append((n, drops))
+    if not rows:
+        return '<p class="dim">No missing parts in this group.</p>'
+    return _needed_parts_table(rows, show_type=show_type)
+
+
+def _render_needed_overview(
+    needed,
+    active: str,
+    title: str,
+    body: str,
+    note: str = "",
+    *,
+    filter_tabs: list[tuple[str, str, str]] | None = None,
+    active_filter: str | None = None,
+) -> str:
+    """Wrap a grouped needed-parts overview in the Relics shell."""
+    bar = _subtab_bar(relic_category_tabs(needed), active)
+    if filter_tabs is not None and active_filter is not None:
+        bar += _subtab_bar(filter_tabs, active_filter)
+
+    if not needed:
+        content = (
+            bar + '<div class="flash">No Prime parts are missing \u2014 you have every part '
+            "needed for the Prime items in your crafting plans.</div>"
         )
-        note = (
-            '<p class="dim">Parts appear under every relic age that can drop them; '
-            "each drop list is filtered to that age. Parts that no owned relic can "
-            "drop appear in every table with \u2014 in the drops column.</p>"
-        )
-        title = "Primes \u2014 Relic Age"
-    elif view == "rarity":
-        body = _primes_grouped(
-            needed,
-            lambda drop: drop[3] or "Unknown rarity",
-            _PRIMES_RARITY_ORDER,
-        )
-        note = (
-            '<p class="dim">Parts appear under every drop rarity across your owned '
-            "relics; each drop list is filtered to that rarity. Parts that no owned "
-            "relic can drop appear in every table with \u2014 in the drops column.</p>"
-        )
-        title = "Primes \u2014 Rarity"
+        return _page(title, content, "relics")
+    content = bar + "<h2>Missing Prime Parts</h2>" + _needed_parts_intro(needed) + note + body
+    return _page(title, content, "relics")
+
+
+def render_relics_age(needed, group_slug: str | None = None) -> str:
+    """Render missing Prime parts grouped by owned-relic age."""
+
+    def group_key(drop) -> str:
+        return drop[2] or "Unknown age"
+
+    if group_slug:
+        group = group_slug.capitalize()
+        body = _needed_parts_for_group(needed, group_key, group)
+        title = f"Relics \u2014 By Relic Age \u2014 {group}"
     else:
-        view = "type"
-        by_category: dict[str, list] = defaultdict(list)
-        for n in needed:
-            by_category[n.category or "Other"].append((n, n.drops))
-
-        ordered = _ordered_group_keys(by_category, _RELIC_CATEGORY_ORDER)
-        body = "".join(
-            f"<h3>{_esc(category)}</h3>{_primes_table(by_category[category])}"
-            for category in ordered
-        )
-        note = ""
-        title = "Primes"
-
-    content = (
-        _subtab_bar(_PRIMES_SUBTABS, view) + "<h2>Missing Prime Parts</h2>" + intro + note + body
+        body = _needed_parts_grouped(needed, group_key, _RELIC_AGE_ORDER)
+        title = "Relics \u2014 By Relic Age"
+    note = (
+        '<p class="dim">Parts appear under every relic age that can drop them; '
+        "each drop list is filtered to that age. Parts with no owned relic drop "
+        "are listed separately at the end.</p>"
     )
-    return _page(title, content, "primes")
+    return _render_needed_overview(
+        needed,
+        "age",
+        title,
+        body,
+        note,
+        filter_tabs=_overview_filter_tabs("/relics/age", RELIC_AGE_SLUGS),
+        active_filter=group_slug or "all",
+    )
 
 
-# ---------------------------------------------------------------------------
-# Relics
-# ---------------------------------------------------------------------------
-# Safe to Spam (default) plus one subtab per needed-drop item category:
-# Warframes, Primary, Secondary, Melee, Archwing, etc.
-#
+def render_relics_rarity(needed, group_slug: str | None = None) -> str:
+    """Render missing Prime parts grouped by owned-relic drop rarity."""
+
+    def group_key(drop) -> str:
+        return drop[3] or "Unknown rarity"
+
+    if group_slug:
+        group = group_slug.capitalize()
+        body = _needed_parts_for_group(needed, group_key, group)
+        title = f"Relics \u2014 By Rarity \u2014 {group}"
+    else:
+        body = _needed_parts_grouped(
+            needed,
+            group_key,
+            _RELIC_RARITY_ORDER,
+            ensure=_RELIC_RARITY_ORDER,
+        )
+        title = "Relics \u2014 By Rarity"
+    note = (
+        '<p class="dim">Parts appear under every drop rarity across your owned '
+        "relics; each drop list is filtered to that rarity. Parts with no owned "
+        "relic drop are listed separately at the end.</p>"
+    )
+    return _render_needed_overview(
+        needed,
+        "rarity",
+        title,
+        body,
+        note,
+        filter_tabs=_overview_filter_tabs("/relics/rarity", RELIC_RARITY_SLUGS),
+        active_filter=group_slug or "all",
+    )
 
 
 def render_relics_needed(needed, category_slug: str) -> str:
