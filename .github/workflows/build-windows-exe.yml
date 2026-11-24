@@ -57,11 +57,16 @@ jobs:
 
       - name: Attach to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/warframe-profile.exe
-            dist/warframe-profile.exe.sha256
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Generate the changelog only when creating the release. Both
+          # platform jobs upload to the same release, so regenerating notes
+          # here would append duplicate "Full Changelog" sections.
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/warframe-profile.exe \
+            dist/warframe-profile.exe.sha256 \
+            --clobber

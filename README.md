@@ -184,9 +184,10 @@ executable** GitHub Actions workflow manually from the Actions tab). Use a
 
 Pushing a `v*` tag runs both platform workflows; each builds its executable
 and attaches the binary plus its SHA-256 checksum to the GitHub Release for
-that tag. The release is created automatically if it does not exist. Runs
-without a tag (manual dispatches and normal pushes) only upload workflow
-artifacts.
+that tag. The release is created automatically if it does not exist, and its
+notes are generated only on creation so the two platform jobs cannot append
+duplicate changelogs. Runs without a tag (manual dispatches and normal
+pushes) only upload workflow artifacts.
 
 **Windows (cross-build from Linux)**
 
