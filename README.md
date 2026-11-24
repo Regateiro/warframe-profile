@@ -127,6 +127,11 @@ available with:
 journalctl --user -u warframe-profile -f
 ```
 
+The unit intentionally does not use mount-namespace sandboxing
+(`PrivateTmp`, `ProtectSystem`, `ProtectHome`): in a rootless user service
+those options create a separate user namespace, which prevents the credential
+scanner from reading the running game's `/proc/<pid>/mem`.
+
 The service is a *user* unit, so it starts when you log in. To keep it
 running while logged out, enable lingering once:
 

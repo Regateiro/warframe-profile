@@ -15,13 +15,16 @@ RestartSec=5
 Environment=WARFRAME_WEB_HOST=127.0.0.1
 Environment=WARFRAME_WEB_PORT=8090
 
-# Lightweight sandboxing. The server only needs to read the install and
-# the game files, and write its caches under the data directory.
+# Lightweight sandboxing. The server only needs the network and access to
+# the game process.
+#
+# Do NOT add mount-namespace hardening here (PrivateTmp, ProtectSystem,
+# ProtectHome, PrivateMounts, ...).  In a rootless systemd user service those
+# options put the unit in its own user namespace, and the kernel then denies
+# reads of /proc/<warframe-pid>/maps and /proc/<warframe-pid>/mem across user
+# namespaces.  The credential scanner needs both files, so the service would
+# report "Could not find accountId/nonce in Warframe memory".
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=%h/.local/share/warframe-profile
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]

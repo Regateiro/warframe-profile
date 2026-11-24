@@ -83,7 +83,7 @@ install-service: ## Install and enable the systemd user service
 		-e 's|@SERVICE_WORKDIR@|$(SERVICE_WORKDIR)|g' \
 		"$(SERVICE_UNIT_SRC)" > "$(SERVICE_FILE)"
 	$(SYSTEMCTL) daemon-reload
-	$(SYSTEMCTL) enable "$(SERVICE_NAME)"
+	$(SYSTEMCTL) disable "$(SERVICE_NAME)"
 	$(SYSTEMCTL) restart "$(SERVICE_NAME)"
 	@printf '\nInstalled %s\n' "$(SERVICE_FILE)"
 
