@@ -9,6 +9,7 @@ from warframe_profile.model.relics import _reward_names_for_part
 
 _VALKYR = "/Lotus/Powersuits/Berserker/ValkyrPrime"
 _CHASSIS = "/Lotus/Types/Recipes/WarframeRecipes/ValkyrPrimeChassisComponent"
+_CHASSIS_BP = "/Lotus/Types/Recipes/WarframeRecipes/ValkyrPrimeChassisBlueprint"
 _RELIC = "/Lotus/Types/Game/Projections/T4VoidProjectionValkyrPrimeKey"
 
 _NAUTILUS = "/Lotus/Types/Sentinels/SentinelPowersuits/NautilusPrimeSentinelPowerSuit"
@@ -119,6 +120,19 @@ def _nautilus_items() -> list[dict]:
             "rewards": [{"item": {"name": "Nautilus Prime Chassis"}, "rarity": "Rare"}],
         },
     ]
+
+
+def test_owned_component_blueprint_covers_its_missing_part():
+    items = _items()
+    inventory = {
+        "MiscItems": [{"ItemType": _RELIC, "ItemCount": 1}],
+        "Recipes": [{"ItemType": _CHASSIS_BP, "ItemCount": 1}],
+    }
+    recipes = {_CHASSIS_BP: {"resultType": _CHASSIS}}
+    item_data, state = _state(items, inventory, recipes)
+
+    assert build_needed_drops(item_data, state) == []
+    assert build_relics_map(item_data, state)[0].safe is True
 
 
 def test_pending_parent_item_covers_its_missing_parts():

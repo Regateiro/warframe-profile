@@ -261,6 +261,8 @@ covered:
   - Non-Prime rewards (Forma, Kuva, Riven Sliver, etc.) are ignored.
   - A Prime part is “not needed” when owned copies already cover all required
     builds (`missing == 0`). This accounts for parts consumed by crafting.
+    Unbuilt component blueprints in the inventory count as owned copies, so a
+    part the player already holds is not reported as a missing relic drop.
   - Items and components currently in the foundry count as covered: a pending
     finished item satisfies one build, and a pending component satisfies one
     copy of that part.
@@ -288,6 +290,9 @@ For each Prime item and each tradable part:
 - Required copies = `part count × needed builds`, where needed builds is 1 for
   an unowned item plus any extra copies consumed by sub-crafts (akimbo variants).
 - Built copies of a Prime component that are already finished are subtracted.
+- Owned copies include both finished components (`MiscItems`) and unbuilt
+  component blueprints (`Recipes`), since the blueprint is the tradable relic
+  reward itself.
 - A row is included only when `missing > 0` and the part has a ducat value.
 - The **Owned Relic Drops** column lists only the player’s owned relics that can
   drop the part, as `relic name ×count`, or `—`.

@@ -41,6 +41,23 @@ def _compute_needed_builds(item_un: str, inventory: Inventory) -> int:
     return needed + inventory.extra_builds.get(item_un, 0)
 
 
+def _owned_part_qty(item_data: ItemData, inventory: Inventory, part_un: str) -> int:
+    """Return owned copies of a prime part, including unbuilt blueprints.
+
+    Warframe components (Chassis, Neuroptics, Systems) exist in two inventory
+    forms: a finished component under ``MiscItems`` once crafted, and the
+    blueprint under ``Recipes`` while it is still the tradable relic reward.
+    Both forms count as owning the part, so a blueprint the player already has
+    must not be reported as a missing relic drop.
+    """
+    owned = inventory.count(part_un)
+    recipe = item_data.recipe_for(part_un)
+    blueprint = recipe.get("_recipeKey", "") if recipe else ""
+    if blueprint:
+        owned += inventory.count(blueprint)
+    return owned
+
+
 def _iter_required_parts(item_data: ItemData, inventory: Inventory):
     """Yield ``(info, part, needed_builds, owned_qty)`` for ducat-valued parts."""
     for un, info in item_data.prime_map.items():
@@ -50,7 +67,7 @@ def _iter_required_parts(item_data: ItemData, inventory: Inventory):
         for part in info["parts"]:
             if part["ducats"] == 0:
                 continue
-            owned_qty = inventory.count(part["uniqueName"])
+            owned_qty = _owned_part_qty(item_data, inventory, part["uniqueName"])
             if part["uniqueName"] in item_data.prime_map and inventory.is_finished(
                 part["uniqueName"]
             ):
