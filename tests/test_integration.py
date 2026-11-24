@@ -13,7 +13,7 @@ from warframe_profile.__main__ import main as cli_main
 from warframe_profile.model import drop_data
 from warframe_profile.presenter import web_server
 
-_DATA = Path(__file__).resolve().parent.parent / "data"
+_DATA = Path(__file__).resolve().parent / "fixtures"
 _ITEMS = _DATA / "export_db.json"
 _INVENTORY = _DATA / "inventory.json"
 

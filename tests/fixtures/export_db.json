@@ -1,0 +1,493 @@
+{
+ "dict": {},
+ "items": [
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Alloy Plate",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/AlloyPlate"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Ferrite",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Misc",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Ferrite"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "components": [
+    {
+     "itemCount": 1,
+     "name": "Forma Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Components/FormaBlueprint"
+    },
+    {
+     "itemCount": 1,
+     "name": "Morphics",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Morphic"
+    },
+    {
+     "itemCount": 1,
+     "name": "Neural Sensors",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/NeuralSensor"
+    },
+    {
+     "itemCount": 1,
+     "name": "Neurodes",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Neurode"
+    },
+    {
+     "itemCount": 1,
+     "name": "Orokin Cell",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/OrokinCell"
+    }
+   ],
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Forma",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Equipment Adapter",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Forma"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "components": [
+    {
+     "itemCount": 1,
+     "name": "Morphics Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Components/MorphicsResourceBlueprint"
+    },
+    {
+     "itemCount": 10000,
+     "name": "Ferrite",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Ferrite"
+    },
+    {
+     "itemCount": 25000,
+     "name": "Nano Spores",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Nanospores"
+    },
+    {
+     "itemCount": 5000,
+     "name": "Polymer Bundle",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/PolymerBundle"
+    },
+    {
+     "itemCount": 10000,
+     "name": "Salvage",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Salvage"
+    }
+   ],
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Morphics",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Morphic"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Nano Spores",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Nanospores"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "components": [
+    {
+     "itemCount": 50000,
+     "name": "Alloy Plate",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/AlloyPlate"
+    },
+    {
+     "itemCount": 1,
+     "name": "Neural Sensors Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Components/NeuralSensorResourceBlueprint"
+    },
+    {
+     "itemCount": 50000,
+     "name": "Nano Spores",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Nanospores"
+    },
+    {
+     "itemCount": 25000,
+     "name": "Salvage",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Salvage"
+    }
+   ],
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Neural Sensors",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/NeuralSensor"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "components": [
+    {
+     "itemCount": 50000,
+     "name": "Alloy Plate",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/AlloyPlate"
+    },
+    {
+     "itemCount": 1,
+     "name": "Neurodes Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Components/NeurodeResourceBlueprint"
+    },
+    {
+     "itemCount": 50000,
+     "name": "Nano Spores",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Nanospores"
+    },
+    {
+     "itemCount": 25000,
+     "name": "Salvage",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Salvage"
+    }
+   ],
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Neurodes",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Misc",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Neurode"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "components": [
+    {
+     "itemCount": 50000,
+     "name": "Alloy Plate",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/AlloyPlate"
+    },
+    {
+     "itemCount": 1,
+     "name": "Orokin Cell Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Components/OrokinCellResourceBlueprint"
+    },
+    {
+     "itemCount": 50000,
+     "name": "Nano Spores",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Nanospores"
+    },
+    {
+     "itemCount": 25000,
+     "name": "Salvage",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Salvage"
+    }
+   ],
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Orokin Cell",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/OrokinCell"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Polymer Bundle",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/PolymerBundle"
+  },
+  {
+   "_source": "resources",
+   "category": "Misc",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Salvage",
+   "productCategory": "",
+   "tradable": false,
+   "type": "Resource",
+   "uniqueName": "/Lotus/Types/Items/MiscItems/Salvage"
+  },
+  {
+   "_source": "resources",
+   "category": "Components",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Cedo Barrel",
+   "productCategory": "",
+   "tradable": false,
+   "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunBarrel"
+  },
+  {
+   "_source": "resources",
+   "category": "Components",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Cedo Receiver",
+   "productCategory": "",
+   "tradable": false,
+   "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunReceiver"
+  },
+  {
+   "_source": "resources",
+   "category": "Components",
+   "masterable": false,
+   "masteryReq": 0,
+   "name": "Cedo Stock",
+   "productCategory": "",
+   "tradable": false,
+   "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunStock"
+  },
+  {
+   "_source": "weapons",
+   "category": "Primary",
+   "components": [
+    {
+     "itemCount": 1,
+     "name": "Cedo Barrel",
+     "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunBarrel"
+    },
+    {
+     "itemCount": 1,
+     "name": "Cedo Blueprint",
+     "uniqueName": "/Lotus/Types/Recipes/Weapons/TnAlchemistShotgunBlueprint"
+    },
+    {
+     "itemCount": 1,
+     "name": "Forma",
+     "uniqueName": "/Lotus/Types/Items/MiscItems/Forma"
+    },
+    {
+     "itemCount": 1,
+     "name": "Cedo Receiver",
+     "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunReceiver"
+    },
+    {
+     "itemCount": 1,
+     "name": "Cedo Stock",
+     "uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunStock"
+    }
+   ],
+   "isPrime": false,
+   "marketCost": 240,
+   "masterable": true,
+   "masteryReq": 8,
+   "name": "Cedo",
+   "productCategory": "LongGuns",
+   "tags": [
+    "Tenno"
+   ],
+   "tradable": false,
+   "type": "Shotgun",
+   "uniqueName": "/Lotus/Weapons/Tenno/LongGuns/TnAlchemistShotgun/TnAlchemistShotgun"
+  }
+ ],
+ "recipes": {
+  "/Lotus/Types/Recipes/Components/FormaBlueprint": {
+   "buildPrice": 35000,
+   "buildTime": 82800,
+   "codexSecret": false,
+   "consumeOnUse": true,
+   "ingredients": [
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Morphic",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Neurode",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Items/MiscItems/NeuralSensor",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Items/MiscItems/OrokinCell",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Types/Items/MiscItems/Forma",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 10,
+   "uniqueName": "/Lotus/Types/Recipes/Components/FormaBlueprint"
+  },
+  "/Lotus/Types/Recipes/Components/MorphicsResourceBlueprint": {
+   "buildPrice": 15000,
+   "buildTime": 3600,
+   "codexSecret": false,
+   "consumeOnUse": false,
+   "ingredients": [
+    {
+     "ItemCount": 10000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Salvage",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 25000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Nanospores",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 10000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Ferrite",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 5000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/PolymerBundle",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Types/Items/MiscItems/Morphic",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 2,
+   "uniqueName": "/Lotus/Types/Recipes/Components/MorphicsResourceBlueprint"
+  },
+  "/Lotus/Types/Recipes/Components/NeuralSensorResourceBlueprint": {
+   "buildPrice": 15000,
+   "buildTime": 3600,
+   "codexSecret": false,
+   "consumeOnUse": false,
+   "ingredients": [
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/AlloyPlate",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Nanospores",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 25000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Salvage",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Types/Items/MiscItems/NeuralSensor",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 2,
+   "uniqueName": "/Lotus/Types/Recipes/Components/NeuralSensorResourceBlueprint"
+  },
+  "/Lotus/Types/Recipes/Components/NeurodeResourceBlueprint": {
+   "buildPrice": 15000,
+   "buildTime": 3600,
+   "codexSecret": false,
+   "consumeOnUse": false,
+   "ingredients": [
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/AlloyPlate",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Nanospores",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 25000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Salvage",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Types/Items/MiscItems/Neurode",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 2,
+   "uniqueName": "/Lotus/Types/Recipes/Components/NeurodeResourceBlueprint"
+  },
+  "/Lotus/Types/Recipes/Components/OrokinCellResourceBlueprint": {
+   "buildPrice": 15000,
+   "buildTime": 3600,
+   "codexSecret": false,
+   "consumeOnUse": false,
+   "ingredients": [
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/AlloyPlate",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 50000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Nanospores",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 25000,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Salvage",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Types/Items/MiscItems/OrokinCell",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 2,
+   "uniqueName": "/Lotus/Types/Recipes/Components/OrokinCellResourceBlueprint"
+  },
+  "/Lotus/Types/Recipes/Weapons/TnAlchemistShotgunBlueprint": {
+   "buildPrice": 20000,
+   "buildTime": 43200,
+   "codexSecret": false,
+   "consumeOnUse": true,
+   "ingredients": [
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunBarrel",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunReceiver",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Recipes/Weapons/WeaponParts/TnAlchemistShotgunStock",
+     "ProductCategory": "MiscItems"
+    },
+    {
+     "ItemCount": 1,
+     "ItemType": "/Lotus/Types/Items/MiscItems/Forma",
+     "ProductCategory": "MiscItems"
+    }
+   ],
+   "num": 1,
+   "resultType": "/Lotus/Weapons/Tenno/LongGuns/TnAlchemistShotgun/TnAlchemistShotgun",
+   "secretIngredients": [],
+   "skipBuildTimePrice": 35,
+   "uniqueName": "/Lotus/Types/Recipes/Weapons/TnAlchemistShotgunBlueprint"
+  }
+ }
+}
