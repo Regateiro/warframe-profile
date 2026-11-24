@@ -1,0 +1,28 @@
+[Unit]
+Description=Warframe Profile web UI
+Documentation=https://github.com/Regateiro/warframe-profile#readme
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@SERVICE_EXEC@
+WorkingDirectory=@SERVICE_WORKDIR@
+Restart=on-failure
+RestartSec=5
+
+# Web server options (see README: Web UI).
+Environment=WARFRAME_WEB_HOST=127.0.0.1
+Environment=WARFRAME_WEB_PORT=8090
+
+# Lightweight sandboxing. The server only needs to read the install and
+# the game files, and write its caches under the data directory.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/warframe-profile
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=default.target

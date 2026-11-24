@@ -1,9 +1,10 @@
 # Warframe Profile — development, packaging, and installation tasks.
 #
-#   make install        # set up the Poetry virtualenv (dev tools included)
+#   make install        # set up the Poetry virtualenv + systemd user service
 #   make build-linux    # build dist/linux/warframe-profile (one-file executable)
 #   make install-linux  # build and install it to $(BINDIR) (default ~/.local/bin)
 #   make build-windows  # cross-build (and zip) dist/windows/warframe-profile.exe via Wine
+#   make start          # start the systemd user service (also stop/restart)
 #   make run ARGS=ducats
 #   make check
 #   make clean
@@ -26,6 +27,16 @@ BIN_NAME ?= warframe-profile
 BINDIR  ?= $(HOME)/.local/bin
 DESTDIR ?=
 
+#: systemd user service. `make install` installs it against the Poetry
+#: virtualenv, while `make install-linux` installs it against $(BINDIR).
+SYSTEMCTL        ?= systemctl --user
+SYSTEMD_USER_DIR ?= $(HOME)/.config/systemd/user
+SERVICE_NAME     ?= warframe-profile.service
+SERVICE_UNIT_SRC := packaging/$(SERVICE_NAME)
+SERVICE_FILE     := $(SYSTEMD_USER_DIR)/$(SERVICE_NAME)
+SERVICE_EXEC     ?= $(BINDIR)/$(BIN_NAME) serve
+SERVICE_WORKDIR  ?= $(HOME)
+
 #: Windows cross-build settings (used by `make build-windows`).
 #: The default installs 64-bit Python into a local Wine prefix on first use.
 WINEPREFIX         ?= $(CURDIR)/.wine-build
@@ -36,20 +47,63 @@ WIN_PYTHON         ?= $(WIN_PYTHON_DIR)\python.exe
 WIN_PYTHON_EXE     ?= $(WINEPREFIX)/drive_c/$(WIN_PYTHON_NAME)/python.exe
 WIN_INSTALLER      ?= $(WINEPREFIX)/python-$(WIN_PYTHON_VERSION)-amd64.exe
 
-.PHONY: help install update run lint format check test clean clean-data \
+.PHONY: help install uninstall update run lint format check test clean clean-data \
+	install-service uninstall-service start stop restart \
 	build-deps build-linux install-linux uninstall-linux wine-setup build-windows clean-build clean-wine
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target> [ARGS=...]\n\nTargets:\n"} \
-		/^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+		/^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nExamples:\n"
 	@printf "  make run ARGS='ducats --refresh'\n"
 	@printf "  make run ARGS='craft \"Acceltra Prime\" --depth 3'\n"
 	@printf "  make install-linux\n"
+	@printf "  make start\n"
 	@printf "  make build-windows\n\n"
 
-install: ## Install the project into the Poetry virtualenv (dev tools included)
+install: ## Install the dev environment and the systemd user service
 	$(POETRY) install --extras dev
+	@if command -v systemctl >/dev/null 2>&1; then \
+		$(MAKE) --no-print-directory install-service \
+			SERVICE_EXEC="$$($(POETRY) env info -p)/bin/python -m warframe_profile serve" \
+			SERVICE_WORKDIR="$(CURDIR)"; \
+	else \
+		echo "systemctl not found; skipping systemd service installation" >&2; \
+	fi
+
+uninstall: uninstall-service ## Remove the systemd user service (keeps the Poetry env)
+
+install-service: ## Install and enable the systemd user service
+	@command -v systemctl >/dev/null 2>&1 || { \
+		echo "error: systemctl not found; the service targets need systemd" >&2; \
+		exit 1; \
+	}
+	install -d "$(SYSTEMD_USER_DIR)"
+	sed -e 's|@SERVICE_EXEC@|$(SERVICE_EXEC)|g' \
+		-e 's|@SERVICE_WORKDIR@|$(SERVICE_WORKDIR)|g' \
+		"$(SERVICE_UNIT_SRC)" > "$(SERVICE_FILE)"
+	$(SYSTEMCTL) daemon-reload
+	$(SYSTEMCTL) enable "$(SERVICE_NAME)"
+	$(SYSTEMCTL) restart "$(SERVICE_NAME)"
+	@printf '\nInstalled %s\n' "$(SERVICE_FILE)"
+
+uninstall-service: ## Stop and remove the systemd user service
+	@if command -v systemctl >/dev/null 2>&1; then \
+		$(SYSTEMCTL) disable --now "$(SERVICE_NAME)" >/dev/null 2>&1 || true; \
+	fi
+	rm -f "$(SERVICE_FILE)"
+	@if command -v systemctl >/dev/null 2>&1; then \
+		$(SYSTEMCTL) daemon-reload; \
+	fi
+
+start: ## Start the systemd user service
+	$(SYSTEMCTL) start "$(SERVICE_NAME)"
+
+stop: ## Stop the systemd user service
+	$(SYSTEMCTL) stop "$(SERVICE_NAME)"
+
+restart: ## Restart the systemd user service
+	$(SYSTEMCTL) restart "$(SERVICE_NAME)"
 
 update: ## Download and merge the latest game data into the per-user data dir
 	$(POETRY) run warframe update
@@ -85,12 +139,22 @@ build-linux: build-deps ## Build a one-file Linux executable at dist/linux/warfr
 		--distpath "$(DIST)/linux" --workpath "$(BUILD)/linux" warframe.spec
 	@printf '\nBuilt %s\n' "$(DIST)/linux/$(BIN_NAME)"
 
-install-linux: build-linux ## Build and install the Linux executable to $(BINDIR)
+install-linux: build-linux ## Build and install the Linux executable and systemd service
 	install -d "$(DESTDIR)$(BINDIR)"
 	install -m 755 "$(DIST)/linux/$(BIN_NAME)" "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
 	@printf '\nInstalled %s\n' "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
+	@if [ -z "$(DESTDIR)" ]; then \
+		$(MAKE) --no-print-directory install-service \
+			SERVICE_EXEC="$(BINDIR)/$(BIN_NAME) serve" \
+			SERVICE_WORKDIR="$(HOME)"; \
+	else \
+		echo "DESTDIR set; skipping systemd service installation"; \
+	fi
 
-uninstall-linux: ## Remove the installed Linux executable
+uninstall-linux: ## Remove the installed Linux executable and systemd service
+	@if [ -z "$(DESTDIR)" ]; then \
+		$(MAKE) --no-print-directory uninstall-service; \
+	fi
 	rm -f "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
 
 # ---------------------------------------------------------------------------

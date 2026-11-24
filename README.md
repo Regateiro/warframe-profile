@@ -68,14 +68,18 @@ The `Makefile` wraps the common workflows:
 
 | Target | Description |
 |---|---|
-| `make install` | Install into the Poetry virtualenv (dev tools included) |
+| `make install` | Install into the Poetry virtualenv (dev tools included) and install/start the systemd user service |
+| `make uninstall` | Remove the systemd user service (keeps the Poetry environment) |
+| `make start` | Start the systemd user service |
+| `make stop` | Stop the systemd user service |
+| `make restart` | Restart the systemd user service |
 | `make run ARGS='...'` | Run the CLI, e.g. `make run ARGS='ducats'` |
 | `make check` | Format, lint, and type check (CI-friendly) |
 | `make test` | Run the test suite (`pytest`) |
 | `make update` | Refresh the merged game database |
 | `make build-linux` | Build the one-file Linux executable at `dist/linux/warframe-profile` |
-| `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`) |
-| `make uninstall-linux` | Remove the installed Linux executable |
+| `make install-linux` | Build and install it to `$(BINDIR)` (default `~/.local/bin`), plus the systemd service |
+| `make uninstall-linux` | Remove the installed Linux executable and systemd service |
 | `make build-windows` | Cross-build and zip the Windows executable through Wine |
 | `make wine-setup` | Install Windows Python + PyInstaller in the Wine prefix |
 | `make clean-build` | Remove `dist/` and `build/` |
@@ -89,11 +93,49 @@ make install-linux DESTDIR=/tmp/pkgroot
 make install-linux BINDIR="$HOME/bin"
 ```
 
+Staged installs (`DESTDIR=...`) skip the systemd service, since it must
+run from its final location.
+
 `make build-windows` uses Wine and downloads a 64-bit Windows Python into
 `.wine-build/` on first use. Override the prefix with
 `WINEPREFIX=/path/to/prefix` to reuse an existing one. The target is
 optional: the GitHub Actions workflow produces the same `.exe` on a
 genuine Windows runner.
+
+### Web service (systemd)
+
+On Linux, `make install` (Poetry environment) and `make install-linux`
+(self-contained binary) both register a **systemd user service** and start
+it. `make install-linux` points the unit at `$(BINDIR)/warframe-profile`;
+`make install` points it at the project's Poetry virtualenv, which is
+handy while developing.
+
+```bash
+make start      # systemctl --user start warframe-profile
+make restart    # restart after a rebuild or config change
+make stop       # stop the server
+make uninstall  # stop, disable, and delete the unit
+```
+
+The server listens on `127.0.0.1:8090`. To change the address or port,
+edit the `WARFRAME_WEB_HOST` / `WARFRAME_WEB_PORT` lines in the unit at
+`~/.config/systemd/user/warframe-profile.service` (source:
+`packaging/warframe-profile.service`), then run `make restart`. Logs are
+available with:
+
+```bash
+journalctl --user -u warframe-profile -f
+```
+
+The service is a *user* unit, so it starts when you log in. To keep it
+running while logged out, enable lingering once:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+`make uninstall-service` removes the service without touching the
+installed binary or Poetry environment.
 
 ### Data directory
 
@@ -137,9 +179,14 @@ py -3 -m PyInstaller --clean --noconfirm warframe.spec
 
 The executable is written to `dist\warframe-profile.exe`. PyInstaller does not
 cross-compile, so build it on Windows (or run the **Build Windows
-executable** GitHub Actions workflow manually from the Actions tab, or
-push a `v*` tag; it uploads the artifact). Use a 64-bit Python: the
-bundled interpreter must be 64-bit for live scanning.
+executable** GitHub Actions workflow manually from the Actions tab). Use a
+64-bit Python: the bundled interpreter must be 64-bit for live scanning.
+
+Pushing a `v*` tag runs both platform workflows; each builds its executable
+and attaches the binary plus its SHA-256 checksum to the GitHub Release for
+that tag. The release is created automatically if it does not exist. Runs
+without a tag (manual dispatches and normal pushes) only upload workflow
+artifacts.
 
 **Windows (cross-build from Linux)**
 
